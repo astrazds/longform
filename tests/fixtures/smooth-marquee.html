@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Longform Fixture - Smooth Marquee</title>
+    <style>
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        min-height: 7600px;
+        overflow: hidden auto;
+        background: #f5f1e8;
+        color: #17120e;
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+
+      main {
+        overflow: hidden;
+      }
+
+      .container {
+        width: min(1080px, calc(100% - 48px));
+        margin: 0 auto;
+      }
+
+      .hero {
+        min-height: 860px;
+        padding: 64px 0;
+      }
+
+      h1 {
+        max-width: 12ch;
+        font-size: 72px;
+        line-height: 0.95;
+      }
+
+      .marquee-clip {
+        width: 100%;
+        overflow: hidden;
+        padding: 48px 0;
+        border-block: 1px solid #d8cfc0;
+      }
+
+      .marquee {
+        display: flex;
+        gap: 16px;
+        width: 4040px;
+        transform: translateX(-112px);
+      }
+
+      .logo-chip {
+        flex: 0 0 auto;
+        padding: 14px 22px;
+        border: 1px solid #cbbda8;
+        border-radius: 999px;
+        background: #fffaf0;
+      }
+
+      section {
+        min-height: 900px;
+        padding: 64px 0;
+        border-bottom: 1px solid #d8cfc0;
+      }
+
+      .end-marker {
+        height: 72px;
+        margin-top: 120px;
+        background: #ff3b8a;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero container">
+        <h1>Smooth root scroll with off-screen marquee</h1>
+        <p>This fixture mirrors pages where programmatic scroll probes can be fooled by CSS smooth scrolling.</p>
+      </section>
+
+      <div class="marquee-clip" aria-hidden="true">
+        <div class="marquee">
+          <span class="logo-chip">Memory</span>
+          <span class="logo-chip">Agents</span>
+          <span class="logo-chip">Knowledge bases</span>
+          <span class="logo-chip">MCP</span>
+          <span class="logo-chip">Shared context</span>
+          <span class="logo-chip">Recall</span>
+          <span class="logo-chip">Portability</span>
+          <span class="logo-chip">Review</span>
+          <span class="logo-chip">Memory</span>
+          <span class="logo-chip">Agents</span>
+          <span class="logo-chip">Knowledge bases</span>
+          <span class="logo-chip">MCP</span>
+          <span class="logo-chip">Shared context</span>
+          <span class="logo-chip">Recall</span>
+          <span class="logo-chip">Portability</span>
+          <span class="logo-chip">Review</span>
+          <span class="logo-chip">Memory</span>
+          <span class="logo-chip">Agents</span>
+          <span class="logo-chip">Knowledge bases</span>
+        </div>
+      </div>
+
+      <section class="container"><h2>Section one</h2><p>Scrollable content.</p></section>
+      <section class="container"><h2>Section two</h2><p>Scrollable content.</p></section>
+      <section class="container"><h2>Section three</h2><p>Scrollable content.</p></section>
+      <section class="container"><h2>Section four</h2><p>Scrollable content.</p></section>
+      <section class="container"><h2>Section five</h2><p>Scrollable content.</p></section>
+      <section class="container"><h2>Section six</h2><p>The footer marker below must be reachable.</p></section>
+      <div class="container">
+        <div class="end-marker" data-longform-end-marker></div>
+      </div>
+    </main>
+  </body>
+</html>

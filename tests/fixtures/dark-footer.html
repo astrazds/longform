@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Longform Fixture - Dark Footer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        background: #111820;
+        color: #d6e0ea;
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        min-height: 4200px;
+        background: #111820;
+      }
+
+      main {
+        width: min(840px, calc(100% - 48px));
+        margin: 0 auto;
+        padding: 48px 0 0;
+      }
+
+      section {
+        min-height: 620px;
+        border-top: 1px solid #2b3845;
+        padding: 28px 0;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0 0 16px;
+      }
+
+      code {
+        background: #1a2430;
+        padding: 2px 6px;
+      }
+
+      .end-marker {
+        height: 72px;
+        margin-top: 96px;
+        background: #ff3b8a;
+        color: #16040c;
+        display: grid;
+        place-items: center;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Dark footer fixture</h1>
+      <p>This page catches bottom truncation and wrong fallback background color.</p>
+      <section><h2>One</h2><p>Long dark content block.</p></section>
+      <section><h2>Two</h2><p>Long dark content block.</p></section>
+      <section><h2>Three</h2><p>Long dark content block.</p></section>
+      <section><h2>Four</h2><p>Long dark content block.</p></section>
+      <section><h2>Five</h2><p>The marker below must appear in the captured PNG.</p></section>
+      <div class="end-marker" data-longform-end-marker>LONGFORM END MARKER</div>
+    </main>
+  </body>
+</html>

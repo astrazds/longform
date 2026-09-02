@@ -1,0 +1,35 @@
+{
+  "name": "longform",
+  "version": "1.3.4",
+  "description": "Chromium extension and static landing page for capturing complete web pages as review-ready PNGs.",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "longform",
+    "chrome-extension",
+    "chromium-extension",
+    "screenshot",
+    "design-review",
+    "png"
+  ],
+  "homepage": "https://astrazds.github.io/longform/",
+  "bugs": {
+    "url": "https://github.com/astrazds/longform/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/astrazds/longform.git"
+  },
+  "scripts": {
+    "test:browser": "node scripts/smoke.mjs",
+    "test:release": "node scripts/smoke.mjs --release",
+    "package:release": "node scripts/package.mjs",
+    "check": "npm run test:browser && npm run test:release"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.60.0"
+  }
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Longform Fixture - Background Mismatch</title>
+    <style>
+      html {
+        background: #09131e;
+      }
+
+      body {
+        margin: 0;
+        min-height: 3000px;
+        background: transparent;
+        color: #d8e5f2;
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+
+      main {
+        width: min(760px, calc(100% - 48px));
+        margin: 0 auto;
+        padding: 56px 0;
+      }
+
+      .spacer {
+        height: 2600px;
+      }
+
+      .end-marker {
+        height: 64px;
+        background: #ff3b8a;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Background mismatch fixture</h1>
+      <p>The canvas fallback should use the visible dark page background.</p>
+      <div class="spacer"></div>
+      <div class="end-marker" data-longform-end-marker></div>
+    </main>
+  </body>
+</html>

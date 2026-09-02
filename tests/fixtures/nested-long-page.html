@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Longform Fixture - Nested Long Page</title>
+    <style>
+      body {
+        margin: 0;
+        background: #f7f4ea;
+        color: #20201c;
+        font: 16px/1.55 system-ui, sans-serif;
+      }
+
+      .shell {
+        width: min(900px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 40px 0;
+      }
+
+      .nested {
+        display: grid;
+        gap: 480px;
+        padding: 24px;
+        border: 1px solid #d8d1be;
+        background: #fffdf7;
+      }
+
+      .deep {
+        min-height: 460px;
+        padding: 24px;
+        background: #ece5d5;
+      }
+
+      .end-marker {
+        height: 64px;
+        background: #ff3b8a;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <h1>Nested long page fixture</h1>
+      <div class="nested">
+        <div class="deep">Nested content block 1</div>
+        <div class="deep">Nested content block 2</div>
+        <div class="deep">Nested content block 3</div>
+        <div class="deep">Nested content block 4</div>
+        <div class="end-marker" data-longform-end-marker></div>
+      </div>
+    </main>
+  </body>
+</html>

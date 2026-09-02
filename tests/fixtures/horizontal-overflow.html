@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Longform Fixture - Horizontal Overflow</title>
+    <style>
+      body {
+        margin: 0;
+        background: #fafafa;
+        color: #202020;
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+
+      main {
+        width: 1800px;
+        min-height: 2400px;
+        padding: 40px;
+        background: linear-gradient(90deg, #fafafa, #dceeff);
+      }
+
+      .wide {
+        width: 1700px;
+        height: 180px;
+        background: repeating-linear-gradient(90deg, #d82872 0 80px, #205cc8 80px 160px);
+      }
+
+      .end-marker {
+        height: 64px;
+        margin-top: 1900px;
+        background: #ff3b8a;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Horizontal overflow fixture</h1>
+      <div class="wide"></div>
+      <div class="end-marker" data-longform-end-marker></div>
+    </main>
+  </body>
+</html>

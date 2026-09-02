@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Longform Fixture - Near Limit</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 7800px;
+        background: #f9fafb;
+        color: #111827;
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+
+      main {
+        width: min(860px, calc(100% - 48px));
+        margin: 0 auto;
+        padding: 40px 0;
+      }
+
+      .spacer {
+        height: 7100px;
+      }
+
+      .end-marker {
+        height: 64px;
+        background: #ff3b8a;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Near limit fixture</h1>
+      <p>This page is tall enough to exercise many scroll tiles.</p>
+      <div class="spacer"></div>
+      <div class="end-marker" data-longform-end-marker></div>
+    </main>
+  </body>
+</html>

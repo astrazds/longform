@@ -36,7 +36,7 @@ Headlines use the display stack with sharp contrast and balanced line breaks. Bo
 
 ## Logo And Mark
 
-The mark is an abstract vertical frame: a long page implied by offset strokes, not a camera or screenshot icon. The wordmark is primary on the landing page; the icon mark must still hold at 16px for the extension toolbar.
+The mark is a pixel-aligned capture frame: a warm cream long page sits inside a stepped charcoal silhouette, with a muted olive rail connecting the right and bottom edges. It uses a strict 16px base grid, three flat colors, and no document lines so the icon remains legible in the extension toolbar. The wordmark remains primary on the landing page.
 
 ## Layout
 

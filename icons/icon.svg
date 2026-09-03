@@ -1,32 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Longform icon">
-  <defs>
-    <linearGradient id="paper" x1="64" y1="34" x2="448" y2="484" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f7f5ef"/>
-      <stop offset="1" stop-color="#e9e5dc"/>
-    </linearGradient>
-    <linearGradient id="ink" x1="112" y1="72" x2="388" y2="440" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#28251f"/>
-      <stop offset="1" stop-color="#15140f"/>
-    </linearGradient>
-    <filter id="lift" x="-12%" y="-12%" width="124%" height="124%">
-      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#1a1812" flood-opacity="0.14"/>
-    </filter>
-  </defs>
-
-  <rect width="512" height="512" rx="112" fill="url(#paper)"/>
-  <path d="M112 92h288" stroke="#d7d2c8" stroke-width="10" stroke-linecap="round"/>
-  <path d="M112 420h288" stroke="#d7d2c8" stroke-width="10" stroke-linecap="round"/>
-
-  <g filter="url(#lift)">
-    <path d="M170 100h118c44 0 80 36 80 80v232H250c-44 0-80-36-80-80V100z" fill="url(#ink)"/>
-    <path d="M222 152h106v208H222z" fill="#f1eee7"/>
-    <path d="M222 152h106" stroke="#f1eee7" stroke-width="30" stroke-linecap="round"/>
-    <path d="M222 360h106" stroke="#f1eee7" stroke-width="30" stroke-linecap="round"/>
-    <path d="M268 196h84" stroke="#87927e" stroke-width="18" stroke-linecap="round"/>
-    <path d="M268 238h62" stroke="#c8c3b8" stroke-width="12" stroke-linecap="round"/>
-    <path d="M268 272h72" stroke="#c8c3b8" stroke-width="12" stroke-linecap="round"/>
-    <path d="M268 306h44" stroke="#c8c3b8" stroke-width="12" stroke-linecap="round"/>
-  </g>
-
-  <path d="M392 160v184c0 38-30 68-68 68h-74" fill="none" stroke="#87927e" stroke-width="20" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-label="Longform icon" shape-rendering="crispEdges">
+  <path fill="#201f1a" d="M2 1h12v1h1v12h-1v1H2v-1H1V2h1z"/>
+  <path fill="#687044" d="M7 3h6v10H7zM4 13h9v1H4z"/>
+  <path fill="#f4f0e5" d="M3 2h8v10h-1v1H3z"/>
 </svg>

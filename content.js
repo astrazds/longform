@@ -1,5 +1,5 @@
 (() => {
-  const CONTENT_SCRIPT_VERSION = '2026-06-18-hidden-scrollbars-v1';
+  const CONTENT_SCRIPT_VERSION = '2026-09-04-clipboard-base64-v2';
 
   // Prevent duplicate listeners for the same script version while allowing upgrades.
   if (window.__longformContentScriptVersion === CONTENT_SCRIPT_VERSION) {
@@ -249,6 +249,19 @@
     });
   }
 
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    let binary = '';
+
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const chunk = bytes.subarray(offset, offset + chunkSize);
+      binary += String.fromCharCode.apply(null, chunk);
+    }
+
+    return btoa(binary);
+  }
+
   function triggerBlobDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -261,16 +274,6 @@
     anchor.click();
     anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
-  }
-
-  async function copyBlobToClipboard(blob) {
-    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-      throw new Error('Copying images is not supported in this browser');
-    }
-
-    await navigator.clipboard.write([
-      new ClipboardItem({ [blob.type || 'image/png']: blob }),
-    ]);
   }
 
   function getCanvasSize(metrics) {
@@ -476,10 +479,18 @@
       };
       diagnostics.artifact = artifact;
 
+      // Return PNG as base64 to the popup. Raw ArrayBuffer/Blob over
+      // chrome.tabs messaging often arrives unusable; ClipboardItem then fails
+      // to decode image/png. Base64 strings survive messaging reliably.
       if (options.delivery === 'clipboard') {
-        await copyBlobToClipboard(blob);
+        const clipboardPngBase64 = arrayBufferToBase64(await blob.arrayBuffer());
 
-        return { artifact, diagnostics };
+        return {
+          artifact,
+          diagnostics,
+          clipboardPngBase64,
+          clipboardType: blob.type || 'image/png',
+        };
       }
 
       if (options.delivery === 'download') {
@@ -507,7 +518,13 @@
       delivery: request?.delivery,
       filename: request?.filename,
     })
-      .then(({ artifact, diagnostics }) => sendResponse({ success: true, artifact, diagnostics }))
+      .then(({ artifact, diagnostics, clipboardPngBase64, clipboardType }) => sendResponse({
+        success: true,
+        artifact,
+        diagnostics,
+        clipboardPngBase64,
+        clipboardType,
+      }))
       .catch((error) => sendResponse({
         success: false,
         error: error.message,

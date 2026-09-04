@@ -43,6 +43,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     return '';
   };
 
+  const getClipboardErrorDetail = (error) => {
+    const message = error?.message || '';
+
+    if (/not supported/i.test(message)) {
+      return 'This browser cannot write image data to the clipboard. Use Capture page instead.';
+    }
+
+    if (/notallowed|permission|denied|document is not focused|clipboarditem presentation/i.test(message)) {
+      return 'Clipboard access was blocked. Keep the popup open and try again, or use Capture page.';
+    }
+
+    if (/message length| QuotaExceeded|too large to copy|Array buffer/i.test(message)) {
+      return 'The PNG was too large to copy. Use Capture page to save it instead.';
+    }
+
+    if (/did not return image data/i.test(message)) {
+      return 'The capture finished, but no PNG bytes reached the popup. Try Capture page instead.';
+    }
+
+    return 'No image was placed on the clipboard. Try again or use Capture page.';
+  };
+
   const getDisplayUrl = (url) => {
     try {
       return new URL(url).host;
@@ -101,6 +123,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     return {
       artifact: response.artifact,
       diagnostics: response.diagnostics,
+      clipboardBuffer: response.clipboardBuffer,
+      clipboardType: response.clipboardType,
     };
   }
 
@@ -110,12 +134,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     validateTab(tab);
     await injectContentScript(tab.id);
     const filename = destination === 'save' ? getCaptureFilename() : undefined;
-    const { artifact, diagnostics } = await requestLongformCapture(tab.id, {
+    const {
+      artifact,
+      diagnostics,
+      clipboardBuffer,
+      clipboardType,
+    } = await requestLongformCapture(tab.id, {
       delivery: destination === 'save' ? 'download' : 'clipboard',
       filename,
     });
 
-    return { artifact, diagnostics, filename, tab };
+    return {
+      artifact,
+      diagnostics,
+      filename,
+      tab,
+      clipboardBuffer,
+      clipboardType,
+    };
+  }
+
+  async function copyPngBlobPromiseToClipboard(blobPromise) {
+    if (!canCopyArtifact()) {
+      throw new Error('Copying images is not supported in this browser');
+    }
+
+    // Start write during the click gesture; the promise may resolve after capture.
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'image/png': blobPromise,
+      }),
+    ]);
   }
 
   async function refreshPopupState({ preserveStatus = false } = {}) {
@@ -148,24 +197,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     copyButton.disabled = true;
 
     try {
-      setStatus(destination === 'save' ? 'Preparing capture...' : 'Copying artifact...');
-      const artifactRecord = await createCaptureArtifact(destination);
-
       if (destination === 'save') {
+        setStatus('Preparing capture...');
+        const artifactRecord = await createCaptureArtifact('save');
         setStatus('Artifact saved.', 'success', artifactRecord.filename);
         await refreshPopupState({ preserveStatus: true });
         return;
       }
+
+      setStatus('Copying artifact...');
+
+      // Capture in the page, then write from this extension page so clipboardWrite
+      // and the click gesture apply. Host-page clipboard rules no longer matter.
+      const blobPromise = createCaptureArtifact('copy').then((record) => {
+        if (!record.clipboardBuffer) {
+          throw new Error('Capture did not return image data for the clipboard');
+        }
+
+        return new Blob([record.clipboardBuffer], { type: 'image/png' });
+      });
+
+      await copyPngBlobPromiseToClipboard(blobPromise);
 
       setStatus('Artifact copied.', 'success', 'Paste it into your review thread.');
       await refreshPopupState({ preserveStatus: true });
     } catch (error) {
       console.error(error);
       const boundaryDetail = getBoundaryDetail(error.message || '');
+      const clipboardDetail = destination === 'copy' && !boundaryDetail
+        ? getClipboardErrorDetail(error)
+        : '';
       setStatus(
-        error.message || 'Capture failed',
+        error.message || (destination === 'copy' ? 'Copy failed' : 'Capture failed'),
         'error',
-        boundaryDetail || 'No artifact was created. Try again or choose another page.'
+        boundaryDetail
+          || clipboardDetail
+          || 'No artifact was created. Try again or choose another page.'
       );
       setSourceActions({
         enabled: !boundaryDetail,

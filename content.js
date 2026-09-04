@@ -1,5 +1,5 @@
 (() => {
-  const CONTENT_SCRIPT_VERSION = '2026-06-18-hidden-scrollbars-v1';
+  const CONTENT_SCRIPT_VERSION = '2026-09-04-clipboard-popup-v1';
 
   // Prevent duplicate listeners for the same script version while allowing upgrades.
   if (window.__longformContentScriptVersion === CONTENT_SCRIPT_VERSION) {
@@ -263,16 +263,6 @@
     window.setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
   }
 
-  async function copyBlobToClipboard(blob) {
-    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-      throw new Error('Copying images is not supported in this browser');
-    }
-
-    await navigator.clipboard.write([
-      new ClipboardItem({ [blob.type || 'image/png']: blob }),
-    ]);
-  }
-
   function getCanvasSize(metrics) {
     const width = Math.round(metrics.pageWidth * metrics.pixelRatio);
     const height = Math.round(metrics.pageHeight * metrics.pixelRatio);
@@ -476,10 +466,17 @@
       };
       diagnostics.artifact = artifact;
 
+      // Return PNG bytes to the popup. Clipboard write must happen in the
+      // extension page (clipboardWrite + user-gesture ClipboardItem), not here.
       if (options.delivery === 'clipboard') {
-        await copyBlobToClipboard(blob);
+        const clipboardBuffer = await blob.arrayBuffer();
 
-        return { artifact, diagnostics };
+        return {
+          artifact,
+          diagnostics,
+          clipboardBuffer,
+          clipboardType: blob.type || 'image/png',
+        };
       }
 
       if (options.delivery === 'download') {
@@ -507,7 +504,13 @@
       delivery: request?.delivery,
       filename: request?.filename,
     })
-      .then(({ artifact, diagnostics }) => sendResponse({ success: true, artifact, diagnostics }))
+      .then(({ artifact, diagnostics, clipboardBuffer, clipboardType }) => sendResponse({
+        success: true,
+        artifact,
+        diagnostics,
+        clipboardBuffer,
+        clipboardType,
+      }))
       .catch((error) => sendResponse({
         success: false,
         error: error.message,

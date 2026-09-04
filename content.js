@@ -1,5 +1,5 @@
 (() => {
-  const CONTENT_SCRIPT_VERSION = '2026-09-04-clipboard-popup-v1';
+  const CONTENT_SCRIPT_VERSION = '2026-09-04-clipboard-base64-v2';
 
   // Prevent duplicate listeners for the same script version while allowing upgrades.
   if (window.__longformContentScriptVersion === CONTENT_SCRIPT_VERSION) {
@@ -249,6 +249,19 @@
     });
   }
 
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    let binary = '';
+
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const chunk = bytes.subarray(offset, offset + chunkSize);
+      binary += String.fromCharCode.apply(null, chunk);
+    }
+
+    return btoa(binary);
+  }
+
   function triggerBlobDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -466,15 +479,16 @@
       };
       diagnostics.artifact = artifact;
 
-      // Return PNG bytes to the popup. Clipboard write must happen in the
-      // extension page (clipboardWrite + user-gesture ClipboardItem), not here.
+      // Return PNG as base64 to the popup. Raw ArrayBuffer/Blob over
+      // chrome.tabs messaging often arrives unusable; ClipboardItem then fails
+      // to decode image/png. Base64 strings survive messaging reliably.
       if (options.delivery === 'clipboard') {
-        const clipboardBuffer = await blob.arrayBuffer();
+        const clipboardPngBase64 = arrayBufferToBase64(await blob.arrayBuffer());
 
         return {
           artifact,
           diagnostics,
-          clipboardBuffer,
+          clipboardPngBase64,
           clipboardType: blob.type || 'image/png',
         };
       }
@@ -504,11 +518,11 @@
       delivery: request?.delivery,
       filename: request?.filename,
     })
-      .then(({ artifact, diagnostics, clipboardBuffer, clipboardType }) => sendResponse({
+      .then(({ artifact, diagnostics, clipboardPngBase64, clipboardType }) => sendResponse({
         success: true,
         artifact,
         diagnostics,
-        clipboardBuffer,
+        clipboardPngBase64,
         clipboardType,
       }))
       .catch((error) => sendResponse({

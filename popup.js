@@ -58,8 +58,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       return 'The PNG was too large to copy. Use Capture page to save it instead.';
     }
 
-    if (/did not return image data/i.test(message)) {
-      return 'The capture finished, but no PNG bytes reached the popup. Try Capture page instead.';
+    if (/did not return image data|invalid png|empty png/i.test(message)) {
+      return 'The capture finished, but no usable PNG reached the popup. Try Capture page instead.';
+    }
+
+    if (/decode|ClipboardItemData|clipboard item/i.test(message)) {
+      return 'The browser could not place this PNG on the clipboard. Try Capture page instead.';
     }
 
     return 'No image was placed on the clipboard. Try again or use Capture page.';
@@ -123,7 +127,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     return {
       artifact: response.artifact,
       diagnostics: response.diagnostics,
-      clipboardBuffer: response.clipboardBuffer,
+      clipboardPngBase64: response.clipboardPngBase64,
       clipboardType: response.clipboardType,
     };
   }
@@ -137,7 +141,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const {
       artifact,
       diagnostics,
-      clipboardBuffer,
+      clipboardPngBase64,
       clipboardType,
     } = await requestLongformCapture(tab.id, {
       delivery: destination === 'save' ? 'download' : 'clipboard',
@@ -149,9 +153,49 @@ document.addEventListener('DOMContentLoaded', async () => {
       diagnostics,
       filename,
       tab,
-      clipboardBuffer,
+      clipboardPngBase64,
       clipboardType,
     };
+  }
+
+  function base64ToUint8Array(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+
+    return bytes;
+  }
+
+  function isPngBytes(bytes) {
+    return bytes.length >= 8
+      && bytes[0] === 0x89
+      && bytes[1] === 0x50
+      && bytes[2] === 0x4e
+      && bytes[3] === 0x47
+      && bytes[4] === 0x0d
+      && bytes[5] === 0x0a
+      && bytes[6] === 0x1a
+      && bytes[7] === 0x0a;
+  }
+
+  function pngBase64ToBlob(base64) {
+    if (typeof base64 !== 'string' || !base64) {
+      throw new Error('Capture did not return image data for the clipboard');
+    }
+
+    const bytes = base64ToUint8Array(base64);
+    if (!bytes.length) {
+      throw new Error('Capture returned empty PNG data for the clipboard');
+    }
+
+    if (!isPngBytes(bytes)) {
+      throw new Error('Capture returned invalid PNG data for the clipboard');
+    }
+
+    return new Blob([bytes], { type: 'image/png' });
   }
 
   async function copyPngBlobPromiseToClipboard(blobPromise) {
@@ -209,13 +253,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       // Capture in the page, then write from this extension page so clipboardWrite
       // and the click gesture apply. Host-page clipboard rules no longer matter.
-      const blobPromise = createCaptureArtifact('copy').then((record) => {
-        if (!record.clipboardBuffer) {
-          throw new Error('Capture did not return image data for the clipboard');
-        }
-
-        return new Blob([record.clipboardBuffer], { type: 'image/png' });
-      });
+      // Start write during the click; rebuild a real PNG Blob from base64 after
+      // capture. Do not pass messaging ArrayBuffers into ClipboardItem.
+      const blobPromise = createCaptureArtifact('copy').then((record) => (
+        pngBase64ToBlob(record.clipboardPngBase64)
+      ));
 
       await copyPngBlobPromiseToClipboard(blobPromise);
 

@@ -37,7 +37,7 @@ Current limits:
 
 - Browser-internal pages such as `chrome://`, `edge://`, extension pages, and similar restricted URLs cannot be captured.
 - Very large pages can hit Chromium canvas limits.
-- Clipboard support depends on browser support for writing image data from an extension context.
+- **Copy PNG** writes from the extension popup during the click gesture; keep the popup open until copy finishes. Delivery still depends on browser support for image clipboard writes.
 
 ## Permission Justifications
 
@@ -66,6 +66,11 @@ Longform does not collect user data. Page content is processed locally only to c
 No account, credentials, payment, backend, or external service is required.
 
 ## Release Notes
+
+### 1.3.5
+
+- Makes **Copy PNG** reliable by writing from the popup with a click-gesture `ClipboardItem` and transferring PNG bytes as base64 across extension messaging.
+- Clarifies that the popup must stay open until copy finishes.
 
 ### 1.3.4
 

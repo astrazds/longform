@@ -48,7 +48,8 @@ Chromium-based browsers.
 1. Open the Longform toolbar popup on the page you want to review.
 2. Choose **Capture page** to save a timestamped PNG.
 3. Choose **Copy PNG** instead when your browser supports writing image data to
-   the clipboard.
+   the clipboard. Keep the popup open until the copy finishes — the write runs
+   from the popup during that click gesture.
 
 ```mermaid
 flowchart LR
@@ -86,8 +87,11 @@ Longform does not request persistent access to all websites. See
   cannot be captured.
 - Very large pages can exceed Chromium canvas limits. Longform reports the
   boundary instead of saving a partial artifact.
-- Clipboard delivery depends on browser support for image writes from an
-  extension context.
+- **Copy PNG** writes from the extension popup during the click gesture, so
+  host-page clipboard rules no longer apply. Keep the popup open until copy
+  finishes. Delivery still depends on browser support for image clipboard
+  writes, and very large PNGs may exceed extension messaging limits (use
+  **Capture page** instead).
 - The current installation path is manual. No Chrome Web Store release is
   published yet.
 
@@ -122,7 +126,7 @@ its popup and service worker. `npm run check` runs both browser suites. Set
 `CHROMIUM_EXECUTABLE` to use a specific browser; otherwise the scripts use a
 system Chromium or Playwright's installed Chromium.
 
-The release command creates `dist/longform-1.3.4.zip`. The archive contains
+The release command creates `dist/longform-1.3.5.zip`. The archive contains
 only the manifest, runtime files, popup files, and four PNG icons.
 
 Contributions are welcome; read [CONTRIBUTING.md](CONTRIBUTING.md) before

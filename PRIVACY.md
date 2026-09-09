@@ -10,12 +10,12 @@ Longform does not collect, sell, transmit, or remotely store personal informatio
 
 ## How Captures Work
 
-When you open Longform on a supported `http://` or `https://` page and choose **Capture page** or **Copy PNG**, the extension temporarily reads the visible page layout in your browser so it can scroll, capture, and stitch the page into one PNG image.
+When you open Longform on a supported `http://` or `https://` page and choose **Save** or **Copy**, the extension temporarily reads the visible page layout in your browser so it can scroll, capture, and stitch the page into one PNG image.
 
 The generated PNG stays on your device. Longform only sends the image to a destination when you explicitly choose one:
 
-- **Capture page / Save PNG** saves the PNG through the browser's local download flow.
-- **Copy PNG** writes the PNG to your local clipboard when browser support allows it.
+- **Save** saves the PNG through the browser's local download flow.
+- **Copy** writes the PNG to your local clipboard when browser support allows it.
 
 After that, you control where the file or clipboard image goes.
 

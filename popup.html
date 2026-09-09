@@ -7,42 +7,14 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="container">
-    <header class="toolbar-header">
-      <img class="app-icon" src="icons/icon32.png" alt="" width="20" height="20">
-      <div class="title-group">
-        <h1>Longform</h1>
-        <p class="description">Full-page capture for design review.</p>
-      </div>
-    </header>
-
-    <div class="toolbar-panel" aria-label="Page to capture">
-      <div class="tab-meta-row">
-        <span class="tab-meta-label">Page to capture</span>
-      </div>
-      <div class="tab-summary">
-        <img id="tabFavicon" class="tab-favicon" src="icons/icon16.png" alt="" width="16" height="16">
-        <div class="tab-summary-text">
-          <p id="tabTitle" class="tab-title">Loading…</p>
-          <p id="tabUrl" class="tab-url">&nbsp;</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="toolbar-separator" role="separator" aria-hidden="true"></div>
-
+  <main class="container">
+    <h1>Full-page screenshot</h1>
     <div class="toolbar-actions">
-      <button id="screenshotBtn" type="button" class="button-primary">
-        <span>Capture page</span>
-      </button>
-      <button id="copyBtn" type="button" class="button-secondary">
-        <span>Copy PNG</span>
-      </button>
+      <button id="screenshotBtn" type="button" class="button-primary" aria-label="Save full-page screenshot as PNG" disabled>Save</button>
+      <button id="copyBtn" type="button" class="button-secondary" aria-label="Copy full-page screenshot as PNG" disabled>Copy</button>
     </div>
-
-    <p id="status" class="status" aria-live="polite"></p>
-    <p id="statusDetail" class="status-detail" aria-live="polite"></p>
-  </div>
+    <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+  </main>
   <script src="protocol.js"></script>
   <script src="clipboard.js"></script>
   <script src="popup.js"></script>

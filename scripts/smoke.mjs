@@ -471,15 +471,32 @@ async function runReleaseSmoke() {
     });
 
     const popupState = await popupPage.evaluate(() => ({
+      copyLabel: document.getElementById('copyBtn')?.getAttribute('aria-label'),
       copyText: document.getElementById('copyBtn')?.textContent?.trim(),
+      heading: document.querySelector('h1')?.textContent,
+      oldMetadataPresent: Boolean(document.querySelector('#tabTitle, #tabUrl, #tabFavicon, #statusDetail')),
+      screenshotLabel: document.getElementById('screenshotBtn')?.getAttribute('aria-label'),
       screenshotText: document.getElementById('screenshotBtn')?.textContent?.trim(),
+      statusAtomic: document.getElementById('status')?.getAttribute('aria-atomic'),
+      statusLive: document.getElementById('status')?.getAttribute('aria-live'),
+      statusRole: document.getElementById('status')?.getAttribute('role'),
       title: document.title,
     }));
 
     assert.equal(popupState.title, 'Longform');
-    assert.equal(popupState.copyText, 'Copy PNG');
-    assert.equal(popupState.screenshotText, 'Capture page');
-    await popupPage.waitForFunction(() => document.getElementById('status').textContent === 'This page cannot be captured');
+    assert.equal(popupState.heading, 'Full-page screenshot');
+    assert.equal(popupState.copyText, 'Copy');
+    assert.equal(popupState.screenshotText, 'Save');
+    assert.equal(popupState.copyLabel, 'Copy full-page screenshot as PNG');
+    assert.equal(popupState.screenshotLabel, 'Save full-page screenshot as PNG');
+    assert.equal(popupState.statusRole, 'status');
+    assert.equal(popupState.statusLive, 'polite');
+    assert.equal(popupState.statusAtomic, 'true');
+    assert.equal(popupState.oldMetadataPresent, false);
+    await popupPage.waitForFunction(() => (
+      document.getElementById('status').textContent === 'Open a regular web page, then try again.'
+    ));
+    assert.equal(await popupPage.locator('#status').getAttribute('class'), 'status error');
     assert.equal(await popupPage.locator('#screenshotBtn').isDisabled(), true);
     assert.equal(await popupPage.locator('#copyBtn').isDisabled(), true);
 

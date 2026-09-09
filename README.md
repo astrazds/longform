@@ -46,9 +46,9 @@ Chromium-based browsers.
 ## Use
 
 1. Open the Longform toolbar popup on the page you want to review.
-2. Choose **Capture page** to save a timestamped PNG.
-3. Choose **Copy PNG** instead when your browser supports writing image data to
-   the clipboard. Keep the popup open until the copy finishes — the write runs
+2. Choose **Save** to save a timestamped PNG.
+3. Choose **Copy** instead when your browser supports writing image data to
+   the clipboard. Keep the popup open until the copy finishes - the write runs
    from the popup during that click gesture.
 
 ```mermaid
@@ -87,11 +87,11 @@ Longform does not request persistent access to all websites. See
   cannot be captured.
 - Very large pages can exceed Chromium canvas limits. Longform reports the
   boundary instead of saving a partial artifact.
-- **Copy PNG** writes from the extension popup during the click gesture, so
+- **Copy** writes from the extension popup during the click gesture, so
   host-page clipboard rules no longer apply. Keep the popup open until copy
   finishes. Delivery still depends on browser support for image clipboard
   writes, and very large PNGs may exceed extension messaging limits (use
-  **Capture page** instead).
+  **Save** instead).
 - The current installation path is manual. No Chrome Web Store release is
   published yet.
 

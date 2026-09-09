@@ -24,10 +24,10 @@
     "url": "git+https://github.com/astrazds/longform.git"
   },
   "scripts": {
-    "test:browser": "node scripts/smoke.mjs",
-    "test:release": "node scripts/smoke.mjs --release",
-    "package:release": "node scripts/package.mjs",
-    "check": "npm run test:browser && npm run test:release"
+    "test:browser": "mise run test:browser",
+    "test:release": "mise run test:release",
+    "package:release": "mise run package:release",
+    "check": "mise run check"
   },
   "devDependencies": {
     "playwright-core": "^1.60.0"

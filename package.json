@@ -26,6 +26,7 @@
   "scripts": {
     "test:unit": "mise run test:unit",
     "test:browser": "mise run test:browser",
+    "test:popup": "mise run test:popup",
     "test:release": "mise run test:release",
     "package:release": "mise run package:release",
     "check": "mise run check"

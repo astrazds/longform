@@ -1,4 +1,6 @@
-import { extensionFiles, iconFiles } from './extension-files.mjs';
+import { contentFiles, extensionFiles, iconFiles } from './extension-files.mjs';
+import assert from 'node:assert/strict';
+import { runPopupChecks } from './popup-checks.mjs';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { accessSync, constants, createReadStream } from 'node:fs';
@@ -437,6 +439,14 @@ async function runReleaseSmoke() {
     });
     const packageResult = JSON.parse(stdout.slice(stdout.indexOf('{')));
     const releaseDir = packageResult.releaseDir;
+    const zipEntries = execFileSync('unzip', ['-Z1', packageResult.zipPath], { encoding: 'utf8' })
+      .trim().split('\n').filter((entry) => !entry.endsWith('/')).sort();
+    assert.deepEqual(zipEntries, [...extensionFiles, ...iconFiles.map((icon) => `icons/${icon}`)].sort());
+    for (const file of zipEntries) {
+      const archived = execFileSync('unzip', ['-p', packageResult.zipPath, file]);
+      assert.deepEqual(archived, await readFile(path.join(repoRoot, file)), `Archive bytes match ${file}`);
+      assert.deepEqual(await readFile(path.join(releaseDir, file)), archived, `Unpacked bytes match ${file}`);
+    }
 
     releaseUserDataDir = await mkdtemp(path.join(tmpdir(), 'longform-release-smoke-'));
     releaseBrowserContext = await chromium.launchPersistentContext(releaseUserDataDir, {
@@ -453,6 +463,7 @@ async function runReleaseSmoke() {
       serviceWorker = await releaseBrowserContext.waitForEvent('serviceworker', { timeout: 15000 });
     }
 
+    assert.deepEqual(await serviceWorker.evaluate(() => Longform.protocol.contentFiles), contentFiles);
     const extensionId = new URL(serviceWorker.url()).host;
     const popupPage = await releaseBrowserContext.newPage();
     await popupPage.goto(`chrome-extension://${extensionId}/popup.html`, {
@@ -464,6 +475,13 @@ async function runReleaseSmoke() {
       screenshotText: document.getElementById('screenshotBtn')?.textContent?.trim(),
       title: document.title,
     }));
+
+    assert.equal(popupState.title, 'Longform');
+    assert.equal(popupState.copyText, 'Copy PNG');
+    assert.equal(popupState.screenshotText, 'Capture page');
+    await popupPage.waitForFunction(() => document.getElementById('status').textContent === 'This page cannot be captured');
+    assert.equal(await popupPage.locator('#screenshotBtn').isDisabled(), true);
+    assert.equal(await popupPage.locator('#copyBtn').isDisabled(), true);
 
     const report = {
       ok: true,
@@ -524,6 +542,7 @@ try {
     args: [
       `--disable-extensions-except=${smokeExtensionDir}`,
       `--load-extension=${smokeExtensionDir}`,
+      '--remote-debugging-port=0',
     ],
   });
 
@@ -565,7 +584,7 @@ try {
   ];
   const captureResults = [];
 
-  for (const [label, route] of captureTargets) {
+  for (const [label, route] of process.argv.includes('--popup') ? [] : captureTargets) {
     captureResults.push(await runCaptureTarget({
       baseUrl,
       browserContext,
@@ -577,11 +596,14 @@ try {
     }));
   }
 
+  const popupChecks = await runPopupChecks({ browserContext, serviceWorker, baseUrl, userDataDir, artifactsDir });
+
   const report = {
     ok: true,
     baseUrl,
     smokeExtensionPath: smokeExtensionDir,
     captureResults,
+    popupChecks,
     extensionPath: repoRoot,
     artifactPath: captureResults[0]?.artifactPath,
     reportPath,

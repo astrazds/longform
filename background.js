@@ -1,5 +1,5 @@
-// Service worker: captures the currently visible tab area on demand.
-const CAPTURE_MESSAGE_TYPE = 'captureViewport';
+importScripts('protocol.js');
+const CAPTURE_MESSAGE_TYPE = Longform.protocol.viewportMessage;
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request?.type !== CAPTURE_MESSAGE_TYPE) {

@@ -11,7 +11,10 @@ run = "node node_modules/playwright-core/cli.js install chromium"
 run = "node node_modules/playwright-core/cli.js install --with-deps chromium"
 
 [tasks.check]
-run = ["node scripts/smoke.mjs", "node scripts/smoke.mjs --release"]
+run = ["node --test tests/*.test.mjs", "node scripts/smoke.mjs", "node scripts/smoke.mjs --release"]
+
+[tasks."test:unit"]
+run = "node --test tests/*.test.mjs"
 
 [tasks."test:browser"]
 run = "node scripts/smoke.mjs"

@@ -24,6 +24,7 @@
     "url": "git+https://github.com/astrazds/longform.git"
   },
   "scripts": {
+    "test:unit": "mise run test:unit",
     "test:browser": "mise run test:browser",
     "test:release": "mise run test:release",
     "package:release": "mise run package:release",

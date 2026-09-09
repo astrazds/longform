@@ -1,3 +1,4 @@
+import { extensionFiles, iconFiles } from './extension-files.mjs';
 import { execFile } from 'node:child_process';
 import { cp, mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,23 +10,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const distRoot = path.join(repoRoot, 'dist');
-const packageFiles = [
-  'background.js',
-  'content.js',
-  'manifest.json',
-  'popup.css',
-  'popup.html',
-  'popup.js',
-];
-const iconFiles = [
-  'icon16.png',
-  'icon32.png',
-  'icon48.png',
-  'icon128.png',
-];
 
 async function copyReleaseFiles(releaseDir) {
-  for (const file of packageFiles) {
+  for (const file of extensionFiles) {
     await cp(path.join(repoRoot, file), path.join(releaseDir, file));
   }
 
@@ -56,7 +43,7 @@ console.log(JSON.stringify({
   releaseDir,
   zipPath,
   included: [
-    ...packageFiles,
+    ...extensionFiles,
     ...iconFiles.map((icon) => `icons/${icon}`),
   ],
 }, null, 2));

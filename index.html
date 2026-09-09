@@ -3,183 +3,80 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Longform | Full-page capture for design review</title>
+  <title>Longform | Capture the whole page</title>
   <meta
     name="description"
-    content="Capture a full page as one review-ready PNG in Chrome or Chromium. Save it locally or copy it to the clipboard."
+    content="Save or copy a whole web page as one PNG. Longform runs in Chrome and keeps every capture on your device."
   >
   <link rel="canonical" href="https://astrazds.github.io/longform/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Longform">
-  <meta property="og:title" content="Longform | Full-page capture for design review">
-  <meta property="og:description" content="Capture a full page as one review-ready PNG in Chrome or Chromium.">
+  <meta property="og:title" content="Longform | Capture the whole page">
+  <meta property="og:description" content="Save or copy a whole web page as one PNG. Every capture stays on your device.">
   <meta property="og:url" content="https://astrazds.github.io/longform/">
-  <meta property="og:image" content="https://astrazds.github.io/longform/webstore/assets/screenshot-artifact-1280x800.png">
-  <meta property="og:image:width" content="1280">
-  <meta property="og:image:height" content="800">
-  <meta property="og:image:alt" content="Longform landing page, popup, and full-page capture artifact">
-  <meta name="theme-color" content="#f3f0e8" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#24221d" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f5f2ea" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#24231f" media="(prefers-color-scheme: dark)">
   <link rel="icon" href="icons/icon32.png" sizes="32x32">
   <link rel="stylesheet" href="landing.css">
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to content</a>
 
-  <div class="site-shell" id="top">
-    <div class="app-layout">
-      <aside class="side-rail" aria-label="Longform sections">
-        <a class="brand" href="#top" aria-label="Longform home">
-          <img src="icons/icon32.png" alt="" width="32" height="32">
-          <span>Longform</span>
-        </a>
-        <nav class="rail-nav" aria-label="Primary">
-          <a href="#overview" aria-current="page">Overview</a>
-          <a href="#flow">How it works</a>
-          <a href="#quality">Quality</a>
-          <a href="#install">Install</a>
-          <a href="#limits">Limits</a>
-        </nav>
-        <a class="rail-install" href="#install">Add to Chrome</a>
-      </aside>
+  <main class="landing-page" id="main-content">
+    <header class="masthead">
+      <a class="brand" href="./" aria-label="Longform home">
+        <img src="icons/icon32.png" alt="" width="32" height="32">
+        <span>Longform</span>
+      </a>
+    </header>
 
-      <main id="main-content" class="page-content">
-        <section class="hero" id="overview">
-          <div class="hero-copy">
-            <p class="section-note">Long pages. Clear story.</p>
-            <h1>Some pages deserve to be seen <em>in full.</em></h1>
-            <p class="hero-text">
-              Turn a long page into one review-ready PNG artifact. Save it locally or copy it
-              into the thread where the review is already happening.
-            </p>
-            <div class="hero-actions" aria-label="Primary actions">
-              <a class="button button-primary" href="#install">Add to Chrome <span aria-hidden="true">→</span></a>
-              <a class="button button-secondary" href="#flow">See how it works <span aria-hidden="true">→</span></a>
-            </div>
-            <div class="proof-strip" aria-label="Longform benefits">
-              <article>
-                <h2>Complete artifact</h2>
-                <p>One page, start to finish.</p>
-              </article>
-              <article>
-                <h2>Trust the output</h2>
-                <p>No stitching or partial saves.</p>
-              </article>
-              <article>
-                <h2>Two exits</h2>
-                <p>Save a PNG, or copy one.</p>
-              </article>
-            </div>
+    <section class="hero" aria-labelledby="page-title">
+      <h1 id="page-title">Capture the whole page.</h1>
+      <p class="intro">
+        Save a full-page screenshot or copy it to your clipboard. Free for Chrome.
+        Every capture stays on your device.
+      </p>
+    </section>
+
+    <section class="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install in Chrome</h2>
+      <ol class="install-list">
+        <li>
+          <div class="download-action">
+            <a class="download-link" href="https://github.com/astrazds/longform/archive/refs/heads/main.zip">Download Longform</a>
+            <span>and unzip it.</span>
           </div>
+        </li>
+        <li>
+          Open <code>chrome://extensions</code> and enable <strong>Developer mode</strong>.
+        </li>
+        <li>
+          Choose <strong>Load unpacked</strong> and select the unzipped folder.
+        </li>
+      </ol>
 
-          <div class="preview-wrap">
-            <img
-              class="preview-image"
-              src="webstore/assets/screenshot-artifact-1280x800.png"
-              alt="Example full-page capture artifact created by Longform"
-              width="1280"
-              height="800"
-            >
-          </div>
-        </section>
+      <p class="use-note">Then open a web page and choose <strong>Save</strong> or <strong>Copy</strong> in Longform.</p>
 
-        <section class="flow" id="flow" aria-labelledby="flow-heading">
-          <div class="section-heading">
-            <p class="section-note">How it works</p>
-            <h2 id="flow-heading">One capture, one file, one review thread.</h2>
-          </div>
-          <ol class="flow-list">
-            <li>
-              <span>01</span>
-              <div>
-                <h3>Open a normal website page</h3>
-                <p>Use any standard <code>http://</code> or <code>https://</code> page in Chrome or Chromium.</p>
-              </div>
-            </li>
-            <li>
-              <span>02</span>
-              <div>
-                <h3>Create a capture artifact</h3>
-                <p>Longform scans the full scroll area and produces one continuous PNG.</p>
-              </div>
-            </li>
-            <li>
-              <span>03</span>
-              <div>
-                <h3>Save PNG or Copy PNG</h3>
-                <p>Use a local file for durable evidence, or paste the PNG into a critique thread.</p>
-              </div>
-            </li>
-          </ol>
-        </section>
+      <details class="limits">
+        <summary>What can I capture?</summary>
+        <div class="limits-copy">
+          <p>
+            Longform works on standard <code>http://</code> and <code>https://</code> pages.
+            Chrome blocks extensions on internal pages, extension pages, and other restricted pages.
+          </p>
+          <p>
+            Very large pages can exceed Chrome's image limits. Longform stops instead of saving
+            a partial image. Copy also depends on browser support for clipboard images, so keep
+            the popup open until it finishes.
+          </p>
+        </div>
+      </details>
+    </section>
 
-        <section class="quality" id="quality" aria-label="Quality notes">
-          <article>
-            <h2>Made for design review, not screenshot collecting.</h2>
-            <p>
-              Longform keeps the page sequence together so layout, copy, and below-the-fold
-              details can be discussed as one artifact.
-            </p>
-          </article>
-          <article>
-            <h2>Two exits only.</h2>
-            <p>Save when you need durable evidence. Copy when the next tool accepts pasted PNGs.</p>
-          </article>
-          <article>
-            <h2>Boundaries are named.</h2>
-            <p>Unsupported pages, clipboard limits, and large-page limits are reported instead of hidden behind vague errors.</p>
-          </article>
-        </section>
-
-        <section class="install" id="install" aria-labelledby="install-heading">
-          <div>
-            <p class="section-note">Current install path</p>
-            <h2 id="install-heading">Load it unpacked in Chrome.</h2>
-            <p>
-              This release is distributed as an unpacked extension. The install path is explicit,
-              and so are the limits, until a Chrome Web Store build exists.
-            </p>
-          </div>
-          <ol class="install-list">
-            <li><span>Open <strong>chrome://extensions</strong>.</span></li>
-            <li><span>Enable <strong>Developer mode</strong>.</span></li>
-            <li><span>Choose <strong>Load unpacked</strong>.</span></li>
-            <li><span>Select the <strong>longform</strong> project folder.</span></li>
-            <li><span>Pin Longform, then capture a normal web page.</span></li>
-          </ol>
-        </section>
-
-        <section class="limits" id="limits" aria-labelledby="limits-heading">
-          <div class="section-heading">
-            <p class="section-note">Support and limits</p>
-            <h2 id="limits-heading">Clear boundaries before install.</h2>
-          </div>
-          <dl class="limits-list">
-            <div>
-              <dt>Supported</dt>
-              <dd>Chrome and Chromium-based browsers on standard <code>http://</code> and <code>https://</code> pages.</dd>
-            </div>
-            <div>
-              <dt>Unsupported</dt>
-              <dd>Browser-internal URLs such as <code>chrome://</code>, <code>edge://</code>, extension pages, and similar restricted surfaces.</dd>
-            </div>
-            <div>
-              <dt>Clipboard</dt>
-              <dd><strong>Copy PNG</strong> writes from the extension popup during the click gesture. Keep the popup open until copy finishes. Delivery still depends on browser support for image clipboard writes.</dd>
-            </div>
-            <div>
-              <dt>Large pages</dt>
-              <dd>Chromium canvas limits can stop a capture. Longform reports the boundary instead of saving a partial artifact.</dd>
-            </div>
-          </dl>
-        </section>
-
-        <footer class="site-footer">
-          <a href="https://github.com/astrazds/longform">Source on GitHub</a>
-          <a href="privacy.html">Privacy policy</a>
-        </footer>
-      </main>
-    </div>
-  </div>
+    <footer class="site-footer">
+      <a href="privacy.html">Privacy</a>
+      <a href="https://github.com/astrazds/longform">Source code</a>
+    </footer>
+  </main>
 </body>
 </html>

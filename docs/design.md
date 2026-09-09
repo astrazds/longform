@@ -1,60 +1,68 @@
 # Design
 
-## Brand
+## Identity
 
-Longform is a restrained, typography-first identity for a full-page capture extension used by product and design teams. Longform is the product, package, extension, and documentation name.
+Longform uses a warm paper background, dark text, muted olive accents, and
+system fonts. Typography, spacing, and fine rules provide the structure.
+The interface keeps attention on capture and installation.
 
-## Visual Theme
+The pixel-art mark is defined in [icons/icon.svg](../icons/icon.svg). It uses
+a 16px grid, a cream page, a charcoal frame, and an olive edge. The PNG icons
+are integer-scale derivatives. Preserve crisp edges when updating them.
 
-The visual system is a quiet longform document, not a conversion funnel. It uses an off-white surface, deep ink, fine rules, sparse columns, and one muted olive-gray accent. The scene is a product designer preparing a design review packet late afternoon on a calibrated desktop display, focused and exact.
+## Popup
 
-## Color Palette
+[popup.html](../popup.html) and [popup.css](../popup.css) define a 300px-wide
+popup with 20px padding. A 16px sans-serif heading reads **Full-page
+screenshot**. Save and Copy occupy equal columns with an 8px gap and 44px
+minimum height. Save has the stronger visual emphasis.
 
-Use OKLCH tokens. The site and popup follow the operating system color scheme with matching restrained light and dark palettes.
+The single status region has no visible text or spacing at rest. Progress,
+success, and errors appear below the actions. The live region stays mounted,
+uses polite announcements, and presents each message as one unit.
 
-- `--paper`: `oklch(0.965 0.006 78)`, main background.
-- `--paper-raised`: `oklch(0.985 0.004 78)`, elevated panels and popup surface.
-- `--paper-line`: `oklch(0.855 0.006 78)`, rules and quiet borders.
-- `--ink`: `oklch(0.185 0.012 80)`, primary text and mark.
-- `--ink-muted`: `oklch(0.43 0.01 82)`, supporting text.
-- `--accent`: `oklch(0.49 0.035 138)`, muted olive-gray action/accent.
-- `--accent-soft`: `oklch(0.89 0.025 138)`, low-emphasis accent fields.
-- `--danger`: `oklch(0.48 0.12 30)`, error text.
-- `--success`: `oklch(0.45 0.07 145)`, success text.
+Button labels stay **Save** and **Copy** during capture. Both buttons are
+disabled until the operation finishes. Their accessible names include
+"full-page screenshot as PNG". Keyboard focus uses an opaque outline, and
+reduced-motion preferences remove button transitions.
 
-Dark mode inverts the document atmosphere rather than becoming pure black: warm ink-black surfaces, pale text, preserved olive accents, and softened rule contrast. Primary buttons should keep AA contrast by swapping to a dedicated button text token instead of reusing a surface token.
+## Landing page
 
-## Typography
+[index.html](../index.html) uses one centered column. The sequence is the
+icon and wordmark, **Capture the whole page.**, a short explanation, three
+installation steps, a use note, one native limits disclosure, and footer
+links. There is one download action.
 
-Use local/system fonts only unless a later release adds bundled font files.
+[landing.css](../landing.css) caps the column at 50rem and adjusts padding
+for narrow screens. The serif headline is capped at 4.5rem. Mobile uses the
+same content order from 320px wide. The landing page has no decorative motion.
 
-- Display: `"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif`.
-- Text/UI: `ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`.
-- Code/technical fragments: `"SFMono-Regular", Consolas, "Liberation Mono", monospace`.
+The [privacy page](../privacy.html) shares the stylesheet and wordmark. Its
+policy sections remain a single readable column with a link back home.
 
-Headlines use the display stack with sharp contrast and balanced line breaks. Body and UI use the sans stack for clarity. Body text is 16px or larger; hero display type is fluid and capped. Avoid repeated tracked uppercase labels.
+## Color and type
 
-## Logo And Mark
+The popup and landing page both follow `prefers-color-scheme`. They have
+separate OKLCH palettes in their CSS files; those files own the exact values.
+Dark mode uses warm dark backgrounds, pale text, and lighter olive accents.
+Status messages include text so their meaning does not depend on color.
 
-The mark is a pixel-aligned capture frame: a warm cream long page sits inside a stepped charcoal silhouette, with a muted olive rail connecting the right and bottom edges. It uses a strict 16px base grid, three flat colors, and no document lines so the icon remains legible in the extension toolbar. The wordmark remains primary on the landing page.
+The landing display stack uses Iowan Old Style, Palatino, and Georgia. Body
+text and popup controls use the system sans-serif stack. Technical fragments
+use a local monospace stack. No fonts are fetched from a remote service.
 
-## Layout
+## Review the UI
 
-The landing page uses one narrow, centered reading path. Its order is the wordmark, product promise, installation steps, brief use note, one limits disclosure, and footer. Spacing and fine rules provide the structure.
+Check light and dark mode, keyboard focus, readable errors, and layouts at
+320px, 390px, and desktop widths. Keep primary action targets at least 44px
+high. Check the privacy page when changing shared landing styles.
 
-## Components
+Current reference images live in [docs/screenshots](screenshots/):
 
-- Wordmark: the accepted pixel-art icon beside the Longform name.
-- Download link: the landing page's sole primary action, with a 44px or larger touch target.
-- Installation: three ordered steps for the current unpacked Chrome install path.
-- Limits: one native disclosure after the primary instructions.
-- Popup: concise heading, Save and Copy actions, and status feedback only when needed.
-- Focus states: visible olive outline or underline treatment with enough offset.
+- [Popup](screenshots/popup.png).
+- [Desktop landing page](screenshots/landing-desktop.png).
+- [Mobile landing page in dark mode](screenshots/landing-mobile-dark.png).
 
-## Motion
-
-The landing page has no decorative motion. Keep native interaction behavior for the limits disclosure.
-
-## Responsive Behavior
-
-The same single-column sequence works from 320px mobile screens through desktop widths. Keep readable measures, avoid text overlap, and preserve 44px touch targets.
+These are selected documentation screenshots. Raw browser-test output stays
+in `artifacts/smoke/`. The older images in `webstore/assets/` are historical
+marketing drafts and are not current UI references.

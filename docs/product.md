@@ -1,37 +1,60 @@
 # Product
 
-## Register
+## Purpose
 
-brand
+Longform captures a scrollable web page as one PNG. People can save the image
+or copy it into a design review, QA report, or other app that accepts images.
+The extension processes captures locally and requires no account.
 
-## Users
+## Current flows
 
-Longform is for product and design teams preparing design reviews, QA notes, critique threads, and handoff material. They need a complete page captured as one credible artifact, not a stack of stitched viewport screenshots.
+The [landing page](../index.html) explains the result and the current manual
+Chrome installation. It has one download action, three setup steps, a brief
+use instruction, one limits disclosure, and privacy and source links.
 
-## Product Purpose
+The [popup](../popup.html) shows **Full-page screenshot**, **Save**, and
+**Copy**. Each action starts capture immediately. There is no separate capture
+step, source selector, settings panel, or image editor.
 
-Longform captures a full scrollable web page as a single PNG for design review. Success means a visitor understands the narrow promise quickly, trusts the tool's taste and precision, and can follow the current manual Chrome install path without inflated product claims.
+The popup is quiet when ready. During capture, both buttons are disabled and
+one status message reports progress. Success is **Saved.** or **Copied.**
+Errors give a short recovery instruction. Unsupported pages disable both
+actions; unsupported clipboard writes leave Save available.
 
-## Runtime Boundaries
+## Capture boundaries
 
-Longform targets normal `http://` and `https://` pages in Chrome/Chromium. It should fail clearly for browser-internal pages or captures that exceed Chromium canvas limits. Successful save flows must keep the final PNG out of single extension messages by using bounded artifact transfer before starting the browser download.
+Longform works on regular `http://` and `https://` pages in Chrome and other
+Chromium-based browsers. Browser settings, extension pages, and other
+restricted pages cannot be captured.
 
-## Brand Personality
+The extension scrolls the document and combines viewport screenshots. Fixed
+and sticky elements and root scrollbars are temporarily hidden during
+capture. The original scroll position and temporary inline styles are
+restored when capture finishes or fails.
 
-Slick, restrained, exact. The brand should feel like a refined tool manual for design-literate teams: calm enough for professional review workflows, sharp enough to feel intentionally made, and direct about current limits.
+The engine rejects captures that exceed its canvas limits or fail its scroll
+coverage check. This does not guarantee pixel-perfect output for every
+dynamic page. Browser fixtures cover specific layouts; visual inspection is
+still needed after capture changes.
 
-## Anti-references
+Save downloads the PNG from the content script. Copy returns image data to
+the popup and depends on browser clipboard support and message-size limits.
+The popup must remain open until the operation finishes. See
+[architecture](architecture.md) for delivery and cleanup details.
 
-Avoid generic AI landing pages, SaaS gradient heroes, fake dashboard screenshots, hero metric cards, camera-logo literalism, colorful annotation scrapbook styling, repeated feature-card grids, and decorative browser chrome that competes with the core promise.
+## Privacy boundary
 
-## Design Principles
+The extension has no backend, telemetry, remote code, or persistent access to
+all websites. Capture starts only after the user chooses an action. The
+requested permissions are `activeTab`, `scripting`, and `clipboardWrite`.
+The [privacy policy](../PRIVACY.md) defines the data and permission boundary.
 
-1. Lead with the review artifact: every major section should reinforce one full-page capture as the useful output.
-2. Let typography carry the brand: hierarchy, measure, and restraint matter more than decorative illustration.
-3. Be precise about scope: Chrome/Chromium, normal web pages, manual install, save or copy, no hidden caveats.
-4. Make the product feel credible in a critique thread: quiet, legible, and composed under scrutiny.
-5. Keep symbols abstract: communicate long page, frame, and continuity without literal camera or screenshot clichés.
+## UI priorities
 
-## Accessibility & Inclusion
+Keep the task and the next action clear. Show feedback when it changes what
+the user should do. Avoid repeated claims, page metadata already visible in
+the browser, and additional steps between capture and its destination.
 
-Target WCAG AA contrast, keyboard-visible focus states, reduced-motion support, minimum 44px touch targets, readable text at mobile widths, and no essential information conveyed by color alone.
+Preserve keyboard access, visible focus, readable light and dark themes, and
+44px action targets. The [design guide](design.md) records the current layout
+and styling choices.

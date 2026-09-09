@@ -1,17 +1,21 @@
 # Security policy
 
-## Supported versions
+## Supported code
 
-Security fixes are applied to the latest version on the `main` branch.
+Security fixes target the current `main` branch. Check
+[manifest.json](manifest.json) for the extension version. Update your local
+checkout or downloaded source folder and reload the extension to use a fix.
 
-| Version | Supported |
-| --- | --- |
-| 1.3.x | Yes |
-| Earlier versions | No |
+## Report a vulnerability
 
-## Reporting a vulnerability
-
-Please report suspected vulnerabilities privately through
+Report suspected vulnerabilities privately through
 [GitHub Security Advisories](https://github.com/astrazds/longform/security/advisories/new).
-Include the affected version, impact, reproduction steps, and any suggested
-mitigation. Please do not open a public issue for an undisclosed vulnerability.
+Private vulnerability reporting is enabled for this repository.
+
+Include the extension version or commit, browser version, impact, and steps
+to reproduce the problem. Do not include passwords, private page content, or
+other secrets in the report. Do not open a public issue for an undisclosed
+vulnerability.
+
+For ordinary bugs or support questions, use the
+[issue tracker](https://github.com/astrazds/longform/issues).

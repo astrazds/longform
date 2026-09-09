@@ -99,7 +99,8 @@ Longform does not request persistent access to all websites. See
 
 | Path | Purpose |
 | --- | --- |
-| `manifest.json`, `background.js`, `content.js`, `popup.*` | Extension manifest and runtime |
+| `manifest.json`, `background.js`, `content.js`, `popup.*` | Extension entrypoints and popup |
+| `protocol.js`, `capture*.js`, `clipboard.js` | Capture modules and shared contracts |
 | `index.html`, `privacy.html`, `landing.css` | Static GitHub Pages site |
 | `icons/` | Shared extension and site artwork |
 | `docs/` | Product and visual-design context |
@@ -109,22 +110,24 @@ Longform does not request persistent access to all websites. See
 
 ## Development
 
-Node.js 20 or newer is required.
+`mise.toml` pins Node.js and defines the development commands.
 
 ```sh
-npm ci
-npx playwright install chromium
-npm run test:browser
-npm run test:release
-npm run package:release
-npm run check
+mise install
+mise run install
+mise run browser:install
+mise run check
+mise run package:release
 ```
 
-`npm run test:browser` exercises all eight capture fixtures against the source
-extension. `npm run test:release` rebuilds the production package and verifies
-its popup and service worker. `npm run check` runs both browser suites. Set
-`CHROMIUM_EXECUTABLE` to use a specific browser; otherwise the scripts use a
-system Chromium or Playwright's installed Chromium.
+`mise run check` runs unit contracts, all eight capture fixtures, real toolbar
+popup save and copy checks, and the packaged extension check. Run
+`mise run test:popup` for focused delivery checks. Set `CHROMIUM_EXECUTABLE`
+to use a specific browser; otherwise the scripts use a system Chromium or
+Playwright's installed Chromium.
+
+Read [the capture architecture](docs/architecture.md) for module ownership,
+lifecycle contracts, and the checks to run for each change.
 
 The release command creates `dist/longform-1.3.5.zip`. The archive contains
 only the manifest, runtime files, popup files, and four PNG icons.

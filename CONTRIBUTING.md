@@ -17,11 +17,17 @@ to review.
 5. Run the complete check:
 
    ```sh
-   npm ci
-   npx playwright install chromium
-   npm run check
-   npm run package:release
+   mise install
+   mise run install
+   mise run browser:install
+   mise run check
+   mise run package:release
    ```
+
+Read [the capture architecture](docs/architecture.md) to find the owner and
+verification command for each behavior. `mise.toml` owns project tool versions
+and common tasks. Browser installation uses the locked `playwright-core` CLI.
+Release packaging and checks also require `zip` and `unzip` on `PATH`.
 
 ## Pull requests
 

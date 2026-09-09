@@ -1,5 +1,4 @@
 document.addEventListener('DOMContentLoaded', async () => {
-  // Popup controller: validate the source page, ask the content script to capture, then deliver the PNG.
   const screenshotButton = document.getElementById('screenshotBtn');
   const copyButton = document.getElementById('copyBtn');
   const statusElement = document.getElementById('status');
@@ -7,7 +6,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const tabTitleElement = document.getElementById('tabTitle');
   const tabUrlElement = document.getElementById('tabUrl');
   const tabFaviconElement = document.getElementById('tabFavicon');
-  const FULL_PAGE_MESSAGE_TYPE = 'captureFullPage:v4';
+  const FULL_PAGE_MESSAGE_TYPE = Longform.protocol.fullPageMessage;
+  const { canCopyArtifact, pngBase64ToBlob, copyPngBlobPromiseToClipboard } = Longform.clipboard;
   const SUPPORTED_TAB_PROTOCOL = /^https?:/i;
 
   const setStatus = (message, type = '', detail = '') => {
@@ -22,10 +22,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     screenshotButton.disabled = !enabled;
     copyButton.disabled = !enabled || !copyAvailable;
   };
-
-  const canCopyArtifact = () => (
-    Boolean(navigator.clipboard?.write) && typeof ClipboardItem !== 'undefined'
-  );
 
   const getBoundaryDetail = (message) => {
     if (/too large/i.test(message)) {
@@ -99,21 +95,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  async function injectContentScript(tabId) {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['content.js'],
-    });
-  }
-
   function getCaptureFilename() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     return `longform-capture-${timestamp}.png`;
   }
 
-  async function requestLongformCapture(tabId, { delivery, filename } = {}) {
-    const response = await chrome.tabs.sendMessage(tabId, {
-      delivery,
+  async function createCaptureArtifact(destination) {
+    const tab = await getActiveTab();
+    updateTabSummary(tab);
+    validateTab(tab);
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: Longform.protocol.contentFiles,
+    });
+    const filename = destination === 'save' ? getCaptureFilename() : undefined;
+    const response = await chrome.tabs.sendMessage(tab.id, {
+      delivery: destination === 'save' ? 'download' : 'clipboard',
       filename,
       type: FULL_PAGE_MESSAGE_TYPE,
     });
@@ -124,91 +121,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       throw error;
     }
 
-    return {
-      artifact: response.artifact,
-      diagnostics: response.diagnostics,
-      clipboardPngBase64: response.clipboardPngBase64,
-      clipboardType: response.clipboardType,
-    };
-  }
-
-  async function createCaptureArtifact(destination) {
-    const tab = await getActiveTab();
-    updateTabSummary(tab);
-    validateTab(tab);
-    await injectContentScript(tab.id);
-    const filename = destination === 'save' ? getCaptureFilename() : undefined;
-    const {
-      artifact,
-      diagnostics,
-      clipboardPngBase64,
-      clipboardType,
-    } = await requestLongformCapture(tab.id, {
-      delivery: destination === 'save' ? 'download' : 'clipboard',
-      filename,
-    });
-
-    return {
-      artifact,
-      diagnostics,
-      filename,
-      tab,
-      clipboardPngBase64,
-      clipboardType,
-    };
-  }
-
-  function base64ToUint8Array(base64) {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-
-    return bytes;
-  }
-
-  function isPngBytes(bytes) {
-    return bytes.length >= 8
-      && bytes[0] === 0x89
-      && bytes[1] === 0x50
-      && bytes[2] === 0x4e
-      && bytes[3] === 0x47
-      && bytes[4] === 0x0d
-      && bytes[5] === 0x0a
-      && bytes[6] === 0x1a
-      && bytes[7] === 0x0a;
-  }
-
-  function pngBase64ToBlob(base64) {
-    if (typeof base64 !== 'string' || !base64) {
-      throw new Error('Capture did not return image data for the clipboard');
-    }
-
-    const bytes = base64ToUint8Array(base64);
-    if (!bytes.length) {
-      throw new Error('Capture returned empty PNG data for the clipboard');
-    }
-
-    if (!isPngBytes(bytes)) {
-      throw new Error('Capture returned invalid PNG data for the clipboard');
-    }
-
-    return new Blob([bytes], { type: 'image/png' });
-  }
-
-  async function copyPngBlobPromiseToClipboard(blobPromise) {
-    if (!canCopyArtifact()) {
-      throw new Error('Copying images is not supported in this browser');
-    }
-
-    // Start write during the click gesture; the promise may resolve after capture.
-    await navigator.clipboard.write([
-      new ClipboardItem({
-        'image/png': blobPromise,
-      }),
-    ]);
+    return { filename, clipboardPngBase64: response.clipboardPngBase64 };
   }
 
   async function refreshPopupState({ preserveStatus = false } = {}) {
@@ -251,10 +164,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       setStatus('Copying artifact...');
 
-      // Capture in the page, then write from this extension page so clipboardWrite
-      // and the click gesture apply. Host-page clipboard rules no longer matter.
-      // Start write during the click; rebuild a real PNG Blob from base64 after
-      // capture. Do not pass messaging ArrayBuffers into ClipboardItem.
       const blobPromise = createCaptureArtifact('copy').then((record) => (
         pngBase64ToBlob(record.clipboardPngBase64)
       ));

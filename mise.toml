@@ -1,0 +1,29 @@
+[tools]
+node = "24.19.0"
+
+[tasks.install]
+run = "npm ci"
+
+[tasks."browser:install"]
+run = "node node_modules/playwright-core/cli.js install chromium"
+
+[tasks."browser:install-ci"]
+run = "node node_modules/playwright-core/cli.js install --with-deps chromium"
+
+[tasks.check]
+run = ["node --test tests/*.test.mjs", "node scripts/smoke.mjs", "node scripts/smoke.mjs --release"]
+
+[tasks."test:unit"]
+run = "node --test tests/*.test.mjs"
+
+[tasks."test:browser"]
+run = "node scripts/smoke.mjs"
+
+[tasks."test:popup"]
+run = "node scripts/smoke.mjs --popup"
+
+[tasks."test:release"]
+run = "node scripts/smoke.mjs --release"
+
+[tasks."package:release"]
+run = "node scripts/package.mjs"

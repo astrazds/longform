@@ -6,7 +6,6 @@
   color-scheme: light dark;
   --paper: oklch(0.955 0.007 76);
   --paper-raised: oklch(0.988 0.004 76);
-  --line: oklch(0.85 0.006 78);
   --line-strong: oklch(0.75 0.008 78);
   --ink: oklch(0.18 0.012 78);
   --ink-muted: oklch(0.44 0.01 82);
@@ -14,9 +13,8 @@
   --accent-soft: oklch(0.89 0.026 126);
   --success: oklch(0.45 0.07 145);
   --danger: oklch(0.48 0.12 30);
-  --focus: oklch(0.44 0.055 126 / 0.34);
+  --focus: var(--accent);
   --button-text: var(--paper-raised);
-  --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --text: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -24,7 +22,6 @@
   :root {
     --paper: oklch(0.16 0.011 78);
     --paper-raised: oklch(0.225 0.009 78);
-    --line: oklch(0.34 0.008 78);
     --line-strong: oklch(0.45 0.009 78);
     --ink: oklch(0.91 0.008 78);
     --ink-muted: oklch(0.7 0.008 82);
@@ -32,16 +29,15 @@
     --accent-soft: oklch(0.31 0.026 126);
     --success: oklch(0.74 0.07 145);
     --danger: oklch(0.72 0.11 30);
-    --focus: oklch(0.73 0.055 126 / 0.36);
     --button-text: oklch(0.15 0.012 78);
   }
 }
 
 body {
-  width: 360px;
+  width: 300px;
   margin: 0;
   color: var(--ink);
-  font: 13px/1.45 var(--text);
+  font: 14px/1.4 var(--text);
   background: var(--paper);
 }
 
@@ -51,118 +47,25 @@ h1 {
 }
 
 .container {
-  display: grid;
-  gap: 12px;
-  padding: 12px;
-}
-
-.toolbar-header {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px;
-  align-items: center;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
-}
-
-.app-icon {
-  display: block;
-  border-radius: 7px;
-}
-
-.title-group {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
+  padding: 20px;
 }
 
 h1 {
-  font-family: var(--display);
-  font-size: 19px;
-  font-weight: 400;
-  letter-spacing: -0.03em;
-  line-height: 1;
-}
-
-.description,
-.tab-url,
-.tab-meta-label,
-.status,
-.status-detail {
-  color: var(--ink-muted);
-}
-
-.description {
-  font-size: 12px;
-}
-
-.toolbar-panel {
-  display: grid;
-  gap: 8px;
-  padding: 11px;
-  border: 1px solid var(--line);
-  background: var(--paper-raised);
-}
-
-.tab-meta-row {
-  display: flex;
-  align-items: center;
-}
-
-.tab-meta-label {
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.tab-summary {
-  display: grid;
-  grid-template-columns: 18px 1fr;
-  gap: 9px;
-  align-items: start;
-}
-
-.tab-favicon {
-  display: block;
-  margin-top: 1px;
-  border-radius: 4px;
-  background: var(--paper);
-}
-
-.tab-summary-text {
-  min-width: 0;
-}
-
-.tab-title,
-.tab-url {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tab-title {
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 680;
-}
-
-.tab-url {
-  margin-top: 1px;
-  font-size: 11px;
-}
-
-.toolbar-separator {
-  height: 1px;
-  background: var(--line);
+  margin-bottom: 16px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
 }
 
 .toolbar-actions {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
 button {
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 12px;
   border-radius: 5px;
   font: inherit;
@@ -208,16 +111,16 @@ button:disabled {
   background: var(--accent-soft);
 }
 
-.status,
-.status-detail {
-  min-height: 17px;
-  padding: 0 1px;
-  font-size: 11px;
+.status {
+  margin-top: 16px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
-.status-detail {
-  min-height: 0;
-  margin-top: -9px;
+.status:empty {
+  margin-top: 0;
 }
 
 .status.success {
@@ -226,4 +129,10 @@ button:disabled {
 
 .status.error {
   color: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
 }

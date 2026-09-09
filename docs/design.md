@@ -40,20 +40,21 @@ The mark is a pixel-aligned capture frame: a warm cream long page sits inside a 
 
 ## Layout
 
-Use a document-like structure with a quiet header, a dominant typographic hero, precise rule-separated sections, sparse proof columns, and a semantic CSS/SVG capture artifact. Cards are used sparingly; most grouping should come from alignment, spacing, and fine dividers.
+The landing page uses one narrow, centered reading path. Its order is the wordmark, product promise, installation steps, brief use note, one limits disclosure, and footer. Spacing and fine rules provide the structure.
 
 ## Components
 
-- Header: slim, text-led, with wordmark and compact install CTA.
-- Buttons: rectangular or softly rounded, restrained, no pill-heavy SaaS treatment.
-- Artifact visual: semantic HTML/CSS/SVG long page frame with scroll/review cues.
-- Popup: pale surface, fine borders, clear primary action, local abstract tab badge, calm status states.
+- Wordmark: the accepted pixel-art icon beside the Longform name.
+- Download link: the landing page's sole primary action, with a 44px or larger touch target.
+- Installation: three ordered steps for the current unpacked Chrome install path.
+- Limits: one native disclosure after the primary instructions.
+- Popup: concise heading, Save and Copy actions, and status feedback only when needed.
 - Focus states: visible olive outline or underline treatment with enough offset.
 
 ## Motion
 
-Use subtle opacity/translate reveals only when `prefers-reduced-motion` allows it. Motion should feel like a document coming into focus, not a marketing animation.
+The landing page has no decorative motion. Keep native interaction behavior for the limits disclosure.
 
 ## Responsive Behavior
 
-Mobile starts with the promise, CTA, and support note before the artifact visual. Desktop can use asymmetric columns and a left/right rail. Maintain readable measures, avoid text overlap, and preserve touch targets.
+The same single-column sequence works from 320px mobile screens through desktop widths. Keep readable measures, avoid text overlap, and preserve 44px touch targets.

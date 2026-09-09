@@ -2,81 +2,90 @@ document.addEventListener('DOMContentLoaded', async () => {
   const screenshotButton = document.getElementById('screenshotBtn');
   const copyButton = document.getElementById('copyBtn');
   const statusElement = document.getElementById('status');
-  const statusDetailElement = document.getElementById('statusDetail');
-  const tabTitleElement = document.getElementById('tabTitle');
-  const tabUrlElement = document.getElementById('tabUrl');
-  const tabFaviconElement = document.getElementById('tabFavicon');
   const FULL_PAGE_MESSAGE_TYPE = Longform.protocol.fullPageMessage;
   const { canCopyArtifact, pngBase64ToBlob, copyPngBlobPromiseToClipboard } = Longform.clipboard;
   const SUPPORTED_TAB_PROTOCOL = /^https?:/i;
+  const PHASE_VIEW = Object.freeze({
+    ready: { message: '', tone: '' },
+    saving: { message: 'Saving...', tone: '' },
+    copying: { message: 'Copying...', tone: '' },
+    saved: { message: 'Saved.', tone: 'success' },
+    copied: { message: 'Copied.', tone: 'success' },
+    blocked: { message: '', tone: 'error' },
+    error: { message: '', tone: 'error' },
+  });
+  let uiState = {
+    phase: 'blocked',
+    copyAvailable: canCopyArtifact(),
+    message: '',
+  };
 
-  const setStatus = (message, type = '', detail = '') => {
+  const renderUi = () => {
+    const view = PHASE_VIEW[uiState.phase];
+    const busy = uiState.phase === 'saving' || uiState.phase === 'copying';
+    const blocked = uiState.phase === 'blocked';
+    const copyUnavailableMessage = uiState.phase === 'ready' && !uiState.copyAvailable
+      ? 'Copy is unavailable in this browser. You can still save the screenshot.'
+      : '';
+    const message = uiState.message || view.message || copyUnavailableMessage;
+
+    screenshotButton.textContent = 'Save';
+    copyButton.textContent = 'Copy';
+    screenshotButton.disabled = busy || blocked;
+    copyButton.disabled = busy || blocked || !uiState.copyAvailable;
     statusElement.textContent = message;
-    statusElement.className = `status${type ? ` ${type}` : ''}`;
-    statusDetailElement.textContent = detail;
+    statusElement.className = `status${view.tone ? ` ${view.tone}` : ''}`;
   };
 
-  const setSourceActions = ({ enabled = true, copyAvailable = true } = {}) => {
-    screenshotButton.querySelector('span').textContent = 'Capture page';
-    copyButton.querySelector('span').textContent = 'Copy PNG';
-    screenshotButton.disabled = !enabled;
-    copyButton.disabled = !enabled || !copyAvailable;
+  const transitionTo = (phase, message = '') => {
+    uiState = {
+      phase,
+      copyAvailable: canCopyArtifact(),
+      message,
+    };
+    renderUi();
   };
 
-  const getBoundaryDetail = (message) => {
+  const getBoundaryMessage = (message) => {
     if (/too large/i.test(message)) {
-      return 'This page cannot become one complete PNG in Chromium.';
+      return 'This page is too large for one PNG. Try another page.';
     }
 
     if (/fully scrolled/i.test(message)) {
-      return 'The browser would not scroll far enough to capture the complete page.';
+      return 'This page could not be captured completely. Try another page.';
     }
 
-    if (/cannot be captured/i.test(message)) {
-      return 'Open a normal http:// or https:// page, then try again.';
+    if (/cannot be captured|no active tab/i.test(message)) {
+      return 'Open a regular web page, then try again.';
     }
 
     return '';
   };
 
-  const getClipboardErrorDetail = (error) => {
+  const getClipboardErrorMessage = (error) => {
     const message = error?.message || '';
 
     if (/not supported/i.test(message)) {
-      return 'This browser cannot write image data to the clipboard. Use Capture page instead.';
+      return 'Copy is unavailable in this browser. Save the screenshot instead.';
     }
 
     if (/notallowed|permission|denied|document is not focused|clipboarditem presentation/i.test(message)) {
-      return 'Clipboard access was blocked. Keep the popup open and try again, or use Capture page.';
+      return 'Clipboard access was blocked. Try again, or save the screenshot.';
     }
 
-    if (/message length| QuotaExceeded|too large to copy|Array buffer/i.test(message)) {
-      return 'The PNG was too large to copy. Use Capture page to save it instead.';
+    if (/message length|QuotaExceeded|too large to copy|Array buffer/i.test(message)) {
+      return 'This PNG is too large to copy. Save it instead.';
     }
 
     if (/did not return image data|invalid png|empty png/i.test(message)) {
-      return 'The capture finished, but no usable PNG reached the popup. Try Capture page instead.';
+      return 'The screenshot could not be copied. Save it instead.';
     }
 
     if (/decode|ClipboardItemData|clipboard item/i.test(message)) {
-      return 'The browser could not place this PNG on the clipboard. Try Capture page instead.';
+      return 'The screenshot could not be copied. Try again, or save it instead.';
     }
 
-    return 'No image was placed on the clipboard. Try again or use Capture page.';
-  };
-
-  const getDisplayUrl = (url) => {
-    try {
-      return new URL(url).host;
-    } catch {
-      return url || 'Unavailable';
-    }
-  };
-
-  const updateTabSummary = (tab) => {
-    tabTitleElement.textContent = tab?.title || 'Untitled tab';
-    tabUrlElement.textContent = getDisplayUrl(tab?.url || '');
-    tabFaviconElement.src = 'icons/icon16.png';
+    return 'Could not copy this page. Try again, or save the screenshot.';
   };
 
   async function getActiveTab() {
@@ -102,7 +111,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function createCaptureArtifact(destination) {
     const tab = await getActiveTab();
-    updateTabSummary(tab);
     validateTab(tab);
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -124,79 +132,69 @@ document.addEventListener('DOMContentLoaded', async () => {
     return { filename, clipboardPngBase64: response.clipboardPngBase64 };
   }
 
-  async function refreshPopupState({ preserveStatus = false } = {}) {
+  async function refreshPopupState() {
     try {
       const tab = await getActiveTab();
-      updateTabSummary(tab);
       validateTab(tab);
-      setSourceActions({ enabled: true, copyAvailable: canCopyArtifact() });
-      if (!preserveStatus) {
-        const detail = canCopyArtifact()
-          ? ''
-          : 'Copy is unavailable in this browser. Saving is still available.';
-        setStatus('Ready', '', detail);
-      }
+      transitionTo('ready');
     } catch (error) {
       console.error(error);
-      setSourceActions({ enabled: false });
-      setStatus(
-        error.message || 'This page cannot be captured',
-        'error',
-        'Open a normal http:// or https:// page, then try again.'
-      );
+      transitionTo('blocked', 'Open a regular web page, then try again.');
     }
   }
 
   await refreshPopupState();
 
   async function captureAndDeliver(destination) {
-    screenshotButton.disabled = true;
-    copyButton.disabled = true;
+    transitionTo(destination === 'save' ? 'saving' : 'copying');
+    let copyBlobPromise;
 
     try {
       if (destination === 'save') {
-        setStatus('Preparing capture...');
-        const artifactRecord = await createCaptureArtifact('save');
-        setStatus('Artifact saved.', 'success', artifactRecord.filename);
-        await refreshPopupState({ preserveStatus: true });
+        await createCaptureArtifact('save');
+        transitionTo('saved');
         return;
       }
 
-      setStatus('Copying artifact...');
-
-      const blobPromise = createCaptureArtifact('copy').then((record) => (
+      copyBlobPromise = createCaptureArtifact('copy').then((record) => (
         pngBase64ToBlob(record.clipboardPngBase64)
       ));
 
-      await copyPngBlobPromiseToClipboard(blobPromise);
-
-      setStatus('Artifact copied.', 'success', 'Paste it into your review thread.');
-      await refreshPopupState({ preserveStatus: true });
+      await copyPngBlobPromiseToClipboard(copyBlobPromise);
+      transitionTo('copied');
     } catch (error) {
       console.error(error);
-      const boundaryDetail = getBoundaryDetail(error.message || '');
-      const clipboardDetail = destination === 'copy' && !boundaryDetail
-        ? getClipboardErrorDetail(error)
-        : '';
-      setStatus(
-        error.message || (destination === 'copy' ? 'Copy failed' : 'Capture failed'),
-        'error',
-        boundaryDetail
-          || clipboardDetail
-          || 'No artifact was created. Try again or choose another page.'
+      let captureError;
+
+      if (copyBlobPromise) {
+        try {
+          await copyBlobPromise;
+        } catch (pendingCaptureError) {
+          captureError = pendingCaptureError;
+        }
+      }
+
+      const boundaryMessage = getBoundaryMessage(
+        (captureError || (destination === 'save' ? error : undefined))?.message || ''
       );
-      setSourceActions({
-        enabled: !boundaryDetail,
-        copyAvailable: canCopyArtifact(),
-      });
+
+      if (boundaryMessage) {
+        transitionTo('blocked', boundaryMessage);
+        return;
+      }
+
+      const message = destination === 'copy'
+        ? getClipboardErrorMessage(error)
+        : 'Could not save this page. Try again or choose another page.';
+      transitionTo('error', message);
     }
   }
 
-  screenshotButton.addEventListener('click', async () => {
-    await captureAndDeliver('save');
+  screenshotButton.addEventListener('click', () => {
+    captureAndDeliver('save');
   });
 
-  copyButton.addEventListener('click', async () => {
-    await captureAndDeliver('copy');
+  copyButton.addEventListener('click', () => {
+    captureAndDeliver('copy');
   });
 });

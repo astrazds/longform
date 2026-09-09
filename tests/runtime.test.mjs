@@ -74,3 +74,29 @@ test('clipboard write starts before capture resolves', async () => {
   resolveCapture(new Blob(['png']));
   await write;
 });
+
+test('upgrading and reinjecting the content entry uses the current capture exactly once', async () => {
+  const listeners = new Set([
+    (request, sender, reply) => {
+      if (request.type === 'captureFullPage:v4') reply({ artifact: 'legacy' });
+    },
+  ]);
+  const context = vm.createContext({
+    window: { __longformContentScriptVersion: '2026-09-04-clipboard-base64-v2' },
+    chrome: { runtime: { onMessage: {
+      addListener: (listener) => listeners.add(listener),
+      removeListener: (listener) => listeners.delete(listener),
+    } } },
+  });
+  vm.runInContext(await readFile(new URL('../protocol.js', import.meta.url), 'utf8'), context);
+  context.Longform.captureFullPage = async () => ({ artifact: 'current' });
+  const entry = await readFile(new URL('../content.js', import.meta.url), 'utf8');
+  vm.runInContext(entry, context);
+  vm.runInContext(entry, context);
+  const artifacts = [];
+  for (const listener of listeners) {
+    listener({ type: context.Longform.protocol.fullPageMessage }, {}, (response) => artifacts.push(response.artifact));
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(artifacts, ['current']);
+});

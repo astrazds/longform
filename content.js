@@ -1,10 +1,9 @@
 (() => {
-  if (window.__longformContentScriptVersion === Longform.protocol.contentVersion) {
-    return;
+  if (Longform.captureListener) {
+    chrome.runtime.onMessage.removeListener(Longform.captureListener);
   }
-  window.__longformContentScriptVersion = Longform.protocol.contentVersion;
 
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  Longform.captureListener = (request, sender, sendResponse) => {
     if (request?.type !== Longform.protocol.fullPageMessage) {
       return false;
     }
@@ -27,5 +26,6 @@
       }));
 
     return true;
-  });
+  };
+  chrome.runtime.onMessage.addListener(Longform.captureListener);
 })();

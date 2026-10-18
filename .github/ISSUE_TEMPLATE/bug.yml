@@ -1,0 +1,48 @@
+name: Bug
+description: Report a capture, save, or copy failure.
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: "For a security vulnerability, use [private reporting](https://github.com/astrazds/longform/security/advisories/new) instead of this form."
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what Longform did, and what you expected.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Extension version
+      description: The version on chrome://extensions.
+      placeholder: "1.3.5"
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      description: Browser name and version.
+      placeholder: "Chrome 131"
+    validations:
+      required: true
+  - type: dropdown
+    id: action
+    attributes:
+      label: Action
+      description: Which action failed.
+      options:
+        - Save
+        - Copy
+        - Save and Copy
+        - The extension did not run
+    validations:
+      required: true
+  - type: textarea
+    id: page
+    attributes:
+      label: Page
+      description: A public URL, or the kind of page. Leave out private page content, passwords, and other secrets.

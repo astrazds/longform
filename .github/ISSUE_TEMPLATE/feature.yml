@@ -1,0 +1,24 @@
+name: Feature
+description: Suggest a change to capture, the popup, or the landing page.
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or missing when you use Longform?
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: Proposed change
+      description: What should Longform do instead?
+    validations:
+      required: true
+  - type: textarea
+    id: permissions
+    attributes:
+      label: Permissions and network
+      description: Say if this needs a permission Longform does not already request, or any network call.

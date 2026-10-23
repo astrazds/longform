@@ -22,6 +22,7 @@
       .catch((error) => sendResponse({
         success: false,
         error: error.message,
+        errorCode: error.code || '',
         diagnostics: error.captureDiagnostics,
       }));
 

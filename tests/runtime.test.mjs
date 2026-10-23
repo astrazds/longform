@@ -4,7 +4,8 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 async function loadRuntime(files, globals = {}) {
-  const context = vm.createContext({ Blob, Uint8Array, atob, ...globals });
+  const context = vm.createContext({ Blob, Uint8Array, atob, btoa, ...globals });
+  context.globalThis = context;
   for (const file of ['protocol.js', ...files]) {
     vm.runInContext(await readFile(new URL(`../${file}`, import.meta.url), 'utf8'), context, { filename: file });
   }
@@ -66,13 +67,61 @@ test('clipboard write starts before capture resolves', async () => {
   const capture = new Promise((resolve) => { resolveCapture = resolve; });
   let writtenItems;
   const { clipboard } = await loadRuntime(['clipboard.js'], {
+    location: { protocol: 'chrome-extension:' },
     navigator: { clipboard: { write: (items) => { writtenItems = items; return Promise.resolve(); } } },
     ClipboardItem: class { constructor(data) { this.data = data; } },
   });
-  const write = clipboard.copyPngBlobPromiseToClipboard(capture);
-  assert.equal(writtenItems[0].data['image/png'], capture);
-  resolveCapture(new Blob(['png']));
-  await write;
+  const write = clipboard.copyDuringGesture(() => capture.then(() => ({
+    clipboardPngBase64: 'iVBORw0KGgo=',
+  })));
+  assert.equal(typeof writtenItems[0].data['image/png'].then, 'function');
+  resolveCapture();
+  assert.equal(`${(await write).phrase}`, 'copied');
+});
+
+test('png bytes round-trip through base64 above one chunk', async () => {
+  const { clipboard } = await loadRuntime(['clipboard.js']);
+  const bytes = new Uint8Array(0x8001);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const blob = await clipboard.pngBase64ToBlob(await clipboard.pngBlobToBase64(new Blob([bytes])));
+  assert.equal(Buffer.from(await blob.arrayBuffer()).length, bytes.length);
+});
+
+test('copyDuringGesture refuses a page document', async () => {
+  let writes = 0;
+  const { clipboard } = await loadRuntime(['clipboard.js'], {
+    location: { protocol: 'https:' },
+    navigator: { clipboard: { write: () => { writes += 1; return Promise.resolve(); } } },
+    ClipboardItem: class { constructor(data) { this.data = data; } },
+  });
+  await assert.rejects(
+    () => clipboard.copyDuringGesture(() => Promise.resolve({})),
+    /popup/,
+  );
+  assert.equal(writes, 0);
+});
+
+test('an early clipboard rejection waits for capture and keeps a capture code', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { clipboard } = await loadRuntime(['clipboard.js'], {
+    location: { protocol: 'chrome-extension:' },
+    navigator: {
+      clipboard: {
+        write: () => Promise.reject(Object.assign(new Error('PNG too large to copy'), { code: 'copy-too-large' })),
+      },
+    },
+    ClipboardItem: class { constructor(data) { this.data = data; } },
+  });
+  const pending = clipboard.copyDuringGesture(() => gate.then(() => {
+    throw Object.assign(new Error('too big'), { code: 'page-too-large' });
+  }));
+  let settled = false;
+  pending.then(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  release();
+  assert.equal(`${(await pending).phrase}`, 'page-too-large');
 });
 
 test('upgrading and reinjecting the content entry uses the current capture exactly once', async () => {

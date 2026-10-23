@@ -28,10 +28,11 @@ The extension loads directly from the repository root. There is no compilation s
 
 ## Popup state and capture requests
 
-`popup.js` keeps one local state with `phase`, `copyAvailable`, and `message`.
-The phases are `ready`, `saving`, `copying`, `saved`, `copied`, `blocked`, and
-`error`. One renderer derives enabled controls and the status message. The
-popup validates the active tab on open and again when an action starts.
+`popup.js` keeps one phrase code and `copyAvailable`. `clipboard.js` `phrases`
+supplies the phase and the status text. The phases are `ready`, `saving`,
+`copying`, `saved`, `copied`, `blocked`, and `error`. One renderer derives
+enabled controls and the status message. The popup validates the active tab
+on open and again when an action starts.
 
 Save and Copy each start capture in one click. Both actions stay disabled
 while busy. A blocked page disables both actions. A clipboard-only failure
@@ -54,13 +55,9 @@ Each capture owns its canvas, visited-position set, and diagnostics. The engine 
 
 The engine waits for two animation frames and 600 ms after each scroll. It hides fixed and sticky elements and root scrollbars while capturing. `capture-page.js` owns the `withPreparedState` callback and its `finally` block restores the page's inline styles and original scroll position on success or failure.
 
-The popup starts `navigator.clipboard.write` during the click handler. The `ClipboardItem` receives a promise for the PNG Blob. Awaiting capture before starting the write loses the user gesture on browsers that require it.
+`copyDuringGesture` in `clipboard.js` starts `navigator.clipboard.write` during the popup click. The `ClipboardItem` receives a promise for the PNG blob. Awaiting capture before starting the write loses the user gesture on browsers that require it. The call refuses a document whose protocol is not `chrome-extension:`.
 
-If the clipboard write rejects before capture finishes, the popup waits for
-the pending capture to settle before it re-enables the actions. This lets the
-page restore its state and prevents a retry from overlapping the first
-capture. Capture-size and coverage failures remain distinct from clipboard
-failures so a copy-only error does not disable Save.
+If the clipboard write rejects before capture finishes, `copyDuringGesture` waits for that capture before it returns. The popup then paints the phrase. The page restores its state before the actions enable, so a retry cannot overlap the first capture. A capture failure returns `errorCode`. Size and coverage failures stay distinct from clipboard failures, so a copy-only error does not disable Save.
 
 The production permissions remain `activeTab`, `scripting`, and `clipboardWrite`. The browser test copy adds host access and `tabs` so automation can initiate captures. This does not verify Chromium's toolbar gesture grant for `activeTab`. The release check loads the unmodified packaged manifest and checks its restricted-page state.
 

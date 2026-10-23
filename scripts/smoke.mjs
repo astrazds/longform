@@ -469,6 +469,11 @@ async function runReleaseSmoke() {
     await popupPage.goto(`chrome-extension://${extensionId}/popup.html`, {
       waitUntil: 'domcontentloaded',
     });
+    await popupPage.waitForFunction(() => (
+      document.querySelector('h1')?.textContent === 'Full-page screenshot'
+      && document.getElementById('screenshotBtn')?.textContent?.trim() === 'Save'
+      && document.getElementById('copyBtn')?.textContent?.trim() === 'Copy'
+    ));
 
     const popupState = await popupPage.evaluate(() => ({
       copyLabel: document.getElementById('copyBtn')?.getAttribute('aria-label'),

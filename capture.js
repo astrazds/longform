@@ -12,7 +12,7 @@
     });
 
     if (!response?.success) {
-      throw new Error(response?.error || 'Failed to capture viewport');
+      throwCoded('failed', response?.error || 'Failed to capture viewport');
     }
 
     return response.data;
@@ -28,7 +28,9 @@
     return new Promise((resolve, reject) => {
       canvas.toBlob((blob) => {
         if (!blob) {
-          reject(new Error('Could not encode the capture as PNG'));
+          const error = new Error('Could not encode the capture as PNG');
+          error.code = 'failed';
+          reject(error);
           return;
         }
 
@@ -37,17 +39,11 @@
     });
   }
 
-  function arrayBufferToBase64(buffer) {
-    const bytes = new Uint8Array(buffer);
-    const chunkSize = 0x8000;
-    let binary = '';
-
-    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-      const chunk = bytes.subarray(offset, offset + chunkSize);
-      binary += String.fromCharCode.apply(null, chunk);
-    }
-
-    return btoa(binary);
+  function throwCoded(code, message, diagnostics) {
+    const error = new Error(message);
+    error.code = code;
+    if (diagnostics) error.captureDiagnostics = diagnostics;
+    throw error;
   }
 
   function triggerBlobDownload(blob, filename) {
@@ -99,7 +95,7 @@
 
     const context = canvas.getContext('2d');
     if (!context) {
-      throw new Error('Canvas is not available on this page');
+      throwCoded('failed', 'Canvas is not available on this page');
     }
 
     context.fillStyle = Longform.page.backgroundColor();
@@ -152,26 +148,27 @@
         diagnostics.coverage.uncoveredRight > PARTIAL_CAPTURE_TOLERANCE_CSS_PX ||
         diagnostics.coverage.uncoveredBottom > PARTIAL_CAPTURE_TOLERANCE_CSS_PX
       ) {
-        const error = new Error(
-          'This page could not be fully scrolled, so no complete PNG was created'
+        throwCoded(
+          'incomplete',
+          'This page could not be fully scrolled, so no complete PNG was created',
+          diagnostics,
         );
-        error.captureDiagnostics = diagnostics;
-        throw error;
       }
 
       const blob = await canvasToPngBlob(canvas);
+      if (options.delivery !== 'clipboard' && options.delivery !== 'download') {
+        throwCoded('save-failed', 'Could not save this page. Try again or choose another page.');
+      }
+
       const artifact = {
         byteSize: blob.size,
-        delivery: options.delivery || 'capture',
+        delivery: options.delivery,
         type: blob.type || 'image/png',
       };
       diagnostics.artifact = artifact;
 
-      // Return PNG as base64 to the popup. Raw ArrayBuffer/Blob over
-      // chrome.tabs messaging often arrives unusable; ClipboardItem then fails
-      // to decode image/png. Base64 strings survive messaging reliably.
       if (options.delivery === 'clipboard') {
-        const clipboardPngBase64 = arrayBufferToBase64(await blob.arrayBuffer());
+        const clipboardPngBase64 = await Longform.clipboard.pngBlobToBase64(blob);
 
         return {
           artifact,
@@ -181,11 +178,7 @@
         };
       }
 
-      if (options.delivery === 'download') {
-        triggerBlobDownload(blob, options.filename);
-
-        return { artifact, diagnostics };
-      }
+      triggerBlobDownload(blob, options.filename);
 
       return { artifact, diagnostics };
     });

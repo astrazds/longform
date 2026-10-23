@@ -2,6 +2,7 @@ export const contentFiles = [
   'protocol.js',
   'capture-geometry.js',
   'capture-page.js',
+  'clipboard.js',
   'capture.js',
   'content.js',
 ];
@@ -9,7 +10,6 @@ export const contentFiles = [
 export const extensionFiles = [
   ...contentFiles,
   'background.js',
-  'clipboard.js',
   'manifest.json',
   'popup.css',
   'popup.html',

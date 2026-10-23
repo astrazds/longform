@@ -7,6 +7,7 @@ Longform.protocol = Object.freeze({
     'protocol.js',
     'capture-geometry.js',
     'capture-page.js',
+    'clipboard.js',
     'capture.js',
     'content.js',
   ]),

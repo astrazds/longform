@@ -34,7 +34,9 @@
     const height = Math.round(metrics.pageHeight * metrics.pixelRatio);
 
     if (width <= 0 || height <= 0) {
-      throw new Error('This page does not have a captureable area');
+      const error = new Error('This page does not have a captureable area');
+      error.code = 'no-area';
+      throw error;
     }
 
     if (
@@ -42,9 +44,11 @@
       height > MAX_CANVAS_DIMENSION ||
       width * height > MAX_CANVAS_AREA
     ) {
-      throw new Error(
+      const error = new Error(
         'This page is too large to capture as a single PNG in Chromium'
       );
+      error.code = 'page-too-large';
+      throw error;
     }
 
     return { width, height };

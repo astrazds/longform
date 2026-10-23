@@ -163,7 +163,7 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
         configurable: true,
         value: () => {
           document.documentElement.dataset.clipboardWriteRejected = 'true';
-          return Promise.reject(new Error('PNG too large to copy'));
+          return Promise.reject(Object.assign(new Error('PNG too large to copy'), { code: 'copy-too-large' }));
         },
       });
     });

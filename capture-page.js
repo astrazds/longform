@@ -2,7 +2,13 @@
   const PARTIAL_CAPTURE_TOLERANCE_CSS_PX = Longform.geometry.partialCaptureTolerance;
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const waitForPaint = () => new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(resolve));
+    // Hidden documents may stop producing frames. The timer also bounds the
+    // legacy measurement path; cleanup itself never waits for paint.
+    const timeout = setTimeout(resolve, 100);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      clearTimeout(timeout);
+      resolve();
+    }));
   });
 
   function getRenderedDocumentBounds() {
@@ -129,45 +135,130 @@
     };
   }
 
-  function hideStickyElements() {
-    const hiddenElements = [];
-
-    for (const element of document.querySelectorAll('*')) {
-      const position = window.getComputedStyle(element).position;
-      if (position !== 'fixed' && position !== 'sticky') {
-        continue;
-      }
-
-      hiddenElements.push({
-        element,
-        visibility: element.style.visibility,
-      });
-      element.style.visibility = 'hidden';
-    }
-
-    return () => {
-      for (const { element, visibility } of hiddenElements) {
-        if (element?.style) {
-          element.style.visibility = visibility;
-        }
-      }
-    };
+  /**
+   * @typedef {{ok: boolean, conflicts: readonly string[], failures: readonly string[]}} CleanupResult
+   * @param {object} ctx Session context; cleanup deliberately never checkpoints.
+   * @returns {{prepare(): Promise<void>, scrollTo(x: number, y: number): Promise<void>,
+   *   restore(): Promise<CleanupResult>, restoreSync(): CleanupResult}}
+   */
+  function beginTransaction(ctx) {
+    return createTransaction(ctx, { left: window.scrollX, top: window.scrollY });
   }
 
-  function hideScrollbars() {
-    const style = document.createElement('style');
-    style.textContent = `
-      html::-webkit-scrollbar,
-      body::-webkit-scrollbar {
-        display: none !important;
+  function createTransaction(ctx, originalPosition) {
+    const attempt = ctx.attempt;
+    const journal = [];
+    let prepared = false;
+    let closed = false;
+    let result;
+
+    function checkpoint() {
+      if (closed) throw Object.assign(new Error('Page transaction restored'), { code: 'page-restored' });
+      ctx.checkpoint(attempt);
+    }
+
+    function installProperty(element, property, value, policy = false) {
+      checkpoint();
+      const { style } = element;
+      const previous = {
+        present: Array.from({ length: style.length }, (_, index) => style.item(index)).includes(property),
+        value: style.getPropertyValue(property),
+        priority: style.getPropertyPriority(property),
+      };
+      style.setProperty(property, value, 'important');
+      // Journal immediately after each successful mutation, before any further
+      // page access can throw or cause reentrant cancellation.
+      const entry = { style, property, previous, policy, value, priority: 'important' };
+      journal.push(entry);
+      entry.value = style.getPropertyValue(property);
+      entry.priority = style.getPropertyPriority(property);
+    }
+
+    function restoreSync() {
+      if (closed) return result;
+      // Fence all pending callbacks before the first inverse action, including
+      // pagehide/BFCache where neither promises nor animation frames may run.
+      closed = true;
+      const conflicts = [];
+      const failures = [];
+      const record = (list, identifier) => { if (!list.includes(identifier)) list.push(identifier); };
+      const inverse = (entry) => {
+        try {
+          if (entry.node) {
+            entry.node.remove();
+          } else if (entry.style.getPropertyValue(entry.property) !== entry.value
+            || entry.style.getPropertyPriority(entry.property) !== entry.priority) {
+            record(conflicts, entry.property);
+          } else if (entry.previous.present) {
+            entry.style.setProperty(entry.property, entry.previous.value, entry.previous.priority);
+          } else {
+            entry.style.removeProperty(entry.property);
+          }
+        } catch {
+          record(failures, entry.property || 'owned-style');
+        }
+      };
+      for (const entry of [...journal].reverse()) if (!entry.policy) inverse(entry);
+      try {
+        window.scrollTo({ ...originalPosition, behavior: 'instant' });
+      } catch {
+        record(failures, 'scroll-position');
       }
-    `;
+      // Coordinates are restored with smooth scrolling and snapping still
+      // suppressed. Newer page-owned declarations survive the comparison.
+      for (const entry of [...journal].reverse()) if (entry.policy) inverse(entry);
+      try {
+        window.removeEventListener('pagehide', restoreSync);
+      } catch {
+        record(failures, 'pagehide-listener');
+      }
+      result = Object.freeze({ ok: failures.length === 0,
+        conflicts: Object.freeze(conflicts), failures: Object.freeze(failures) });
+      return result;
+    }
 
-    (document.head || document.documentElement).append(style);
+    window.addEventListener('pagehide', restoreSync);
 
-    return () => {
-      style.remove();
-    };
+    return Object.freeze({
+      async prepare() {
+        checkpoint();
+        if (prepared) return;
+        prepared = true;
+        const targets = new Set([document.documentElement, document.body, document.scrollingElement].filter(Boolean));
+        for (const element of targets) {
+          installProperty(element, 'scroll-behavior', 'auto', true);
+          installProperty(element, 'scroll-snap-type', 'none', true);
+          installProperty(element, 'overflow-anchor', 'none', true);
+        }
+        const style = document.createElement('style');
+        style.textContent = `
+          html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; }
+          *, *::before, *::after {
+            animation-play-state: paused !important;
+            transition: none !important;
+            caret-color: transparent !important;
+          }
+        `;
+        checkpoint();
+        (document.head || document.documentElement).append(style);
+        journal.push({ node: style });
+        for (const element of document.querySelectorAll('*')) {
+          checkpoint();
+          const position = window.getComputedStyle(element).position;
+          if (position === 'fixed' || position === 'sticky') installProperty(element, 'visibility', 'hidden');
+        }
+        await waitForPaint();
+        checkpoint();
+      },
+      async scrollTo(x, y) {
+        checkpoint();
+        window.scrollTo({ left: x, top: y, behavior: 'instant' });
+        await waitForPaint();
+        checkpoint();
+      },
+      async restore() { return restoreSync(); },
+      restoreSync,
+    });
   }
 
   function getPageBackgroundColor() {
@@ -185,30 +276,20 @@
   }
 
   async function withPreparedState(metrics, capture) {
-    const scrollingElement = document.scrollingElement || document.documentElement;
-    const previousScrollBehavior = scrollingElement.style.scrollBehavior;
-    const restoreStickyElements = hideStickyElements();
-    const restoreScrollbars = hideScrollbars();
-    scrollingElement.style.scrollBehavior = 'auto';
-
+    const transaction = createTransaction({ checkpoint() {} }, { left: metrics.scrollX, top: metrics.scrollY });
     try {
-      return await capture({
-        async scrollTo(x, y) {
-          window.scrollTo(x, y);
-          await waitForPaint();
-        },
-      });
+      await transaction.prepare();
+      return await capture({ scrollTo: transaction.scrollTo });
     } finally {
-      restoreScrollbars();
-      restoreStickyElements();
-      scrollingElement.style.scrollBehavior = previousScrollBehavior;
-      window.scrollTo(metrics.scrollX, metrics.scrollY);
+      const cleanup = await transaction.restore();
+      if (!cleanup.ok) throw Object.assign(new Error('Page restoration failed'), { code: 'cleanup-failed' });
     }
   }
 
   Longform.page = Object.freeze({
     measure: getPageMetrics,
     backgroundColor: getPageBackgroundColor,
+    beginTransaction,
     withPreparedState,
   });
 })();

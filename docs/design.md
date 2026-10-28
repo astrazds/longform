@@ -17,9 +17,10 @@ popup with 20px padding. A 16px sans-serif heading reads **Full-page
 screenshot**. Save and Copy occupy equal columns with an 8px gap and 44px
 minimum height. Save has the stronger visual emphasis.
 
-The single status region has no visible text or spacing at rest. Progress,
-success, and errors appear below the actions. The live region stays mounted,
-uses polite announcements, and presents each message as one unit.
+The single status region has no visible text or spacing at rest when Copy is
+available. Progress, success, and errors appear below the actions. The live
+region stays mounted, uses polite announcements, and presents each message as
+one unit.
 
 Button labels stay **Save** and **Copy** during capture. Both buttons are
 disabled until the operation finishes. Their accessible names include

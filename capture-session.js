@@ -269,7 +269,8 @@
       },
       disconnectTransfer(transferId) {
         fresh();
-        if (!current || current.transferId !== transferId || current.terminal) return state;
+        if (!token(transferId) || !current || current.transferId !== transferId || current.terminal
+            || !['transferring', 'delivering'].includes(state.phase)) return state;
         if (current.committed) return owner.finishDelivery(current.id, transferId, 'unknown');
         current.transferId = null;
         pause(current);

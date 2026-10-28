@@ -332,3 +332,23 @@ test('subscription at an elapsed expiry receives one terminal snapshot', async (
   assert.equal(states.length, 1);
   assert.equal(states[0].phase, 'expired');
 });
+
+test('null and stale disconnect before transfer cannot pause capture work', async () => {
+  const capture = deferred();
+  let ctx;
+  const { owner, clock } = await setup((value) => { ctx = value; return capture.promise; });
+  owner.start({ destination: 'download' });
+  const before = owner.snapshot();
+  for (const transferId of [null, undefined, '', 'stale-transfer']) {
+    assert.equal(owner.disconnectTransfer(transferId), before);
+  }
+  assert.equal(owner.snapshot().phase, 'preparing');
+  assert.equal(ctx.signal.aborted, false);
+  await clock.advance(120001);
+  assert.equal(ctx.signal.aborted, true);
+  assert.equal(owner.snapshot().phase, 'cancelling');
+  capture.resolve(png());
+  await flush();
+  assert.equal(owner.snapshot().phase, 'failed');
+  assert.equal(owner.snapshot().errorCode, 'work-timeout');
+});

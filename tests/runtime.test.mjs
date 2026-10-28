@@ -30,9 +30,11 @@ test('the final tile is clipped to the canvas at its actual scroll position', ()
   const context = { canvas: { width: 1280, height: 800 }, drawImage: (...args) => calls.push(args) };
   const bitmap = { width: 1280, height: 720 };
   const metrics = { pageWidth: 1280, pageHeight: 800, viewportWidth: 1280, viewportHeight: 720, pixelRatio: 1 };
-  geometry.drawCapture(context, bitmap, metrics, 0, 560);
+  assert.deepEqual({ ...geometry.drawCapture(context, bitmap, metrics, 0, 560) }, {
+    left: 0, top: 560, right: 1280, bottom: 800,
+  });
   assert.deepEqual(calls, [[bitmap, 0, 0, 1280, 240, 0, 560, 1280, 240]]);
-  geometry.drawCapture(context, bitmap, metrics, 1280, 800);
+  assert.equal(geometry.drawCapture(context, bitmap, metrics, 1280, 800), null);
   assert.equal(calls.length, 1);
 });
 
@@ -41,7 +43,9 @@ test('fractional scroll coordinates use device pixels without crossing canvas ed
   const context = { canvas: { width: 875, height: 1000 }, drawImage: (...args) => calls.push(args) };
   const bitmap = { width: 800, height: 600 };
   const metrics = { pageWidth: 700, pageHeight: 800, viewportWidth: 640, viewportHeight: 480, pixelRatio: 1.25 };
-  geometry.drawCapture(context, bitmap, metrics, 100.5, 400.5);
+  assert.deepEqual({ ...geometry.drawCapture(context, bitmap, metrics, 100.5, 400.5) }, {
+    left: 125, top: 500, right: 875, bottom: 1000,
+  });
   assert.deepEqual(calls, [[bitmap, 0, 0, 750, 500, 125, 500, 750, 500]]);
 });
 

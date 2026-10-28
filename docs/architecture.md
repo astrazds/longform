@@ -87,6 +87,19 @@ work budget. A conservative 512MiB working-set estimate and 32MiB PNG cap reject
 oversized captures. Estimates include canvas, native bitmap, PNG and transport
 copies; they do not measure or guarantee browser RSS.
 
+Capture uses the larger of its capture and encoding phase estimates:
+`12*canvasPixels + max(32*tilePixels, 2*pngReserveBytes) + 16MiB`. The canvas
+allowance includes native copies; the tile allowance covers two UTF-16 base64
+screenshot strings, a tile PNG Blob and decoded bitmap. All tiles close before
+encoding; PNG reservation includes uncompressed RGBA, row filters and conservative
+stored-deflate/chunk/header overhead without assuming compression. The actual
+encoded Blob must still fit 32MiB. Transfer has its own estimate after the runner
+releases its canvas, so worker/popup copies do not overlap capture in this model.
+If Cancel or timeout leaves a native encoder callback pending, a new capture
+waits for it before preparing or allocating. That wait retains the new session's
+Cancel, 10-second external bound and original work deadline; a late callback
+cannot publish the abandoned image. This prevents overlapping native snapshots.
+
 The content owner retains at most one completed PNG per document in isolated
 memory for two minutes. Closing the popup does not cancel capture. Reopening
 attaches to progress or offers the retained image with a fresh Save/Copy click.

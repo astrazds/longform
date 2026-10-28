@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadContext, deferred, flush, fakeClock } from './helpers/runtime.mjs';
+import { loadContext, inject, deferred, flush, fakeClock } from './helpers/runtime.mjs';
 
 const coded = (code) => Object.assign(new Error(code), { code });
 async function setup(options = {}) {
@@ -9,7 +9,7 @@ async function setup(options = {}) {
   const events = new Map();
   const messages = new Set();
   const stats = { snapshots: 0, preparations: 0, restores: 0, disposed: 0, allocations: 0,
-    scrolls: [], tiles: [], draws: [], closes: 0, encodes: [], requests: [], cleanupAt: null };
+    scrolls: [], tiles: [], draws: [], closes: 0, encodes: [], encodedSizes: [], canvases: [], requests: [], cleanupAt: null };
   let generation = 0;
   let scrollX = 0;
   let scrollY = 0;
@@ -19,9 +19,11 @@ async function setup(options = {}) {
   const hold = async (stage) => {
     if (options.hold === stage && !held) { held = true; stats.held = stage; await pending.promise; }
   };
+  const viewportWidth = options.viewportWidth || 100, viewportHeight = options.viewportHeight || 100;
+  const pixelRatio = options.pixelRatio || 1;
   const metrics = () => ({ pageWidth: options.width || 100, pageHeight: rootHeight,
-    viewportWidth: 100, viewportHeight: 100, pixelRatio: 1, scrollX, scrollY,
-    scrollLimits: { maxScrollX: (options.width || 100) - 100, maxScrollY: rootHeight - 100 } });
+    viewportWidth, viewportHeight, pixelRatio, scrollX, scrollY,
+    scrollLimits: { maxScrollX: Math.max(0, (options.width || 100) - viewportWidth), maxScrollY: Math.max(0, rootHeight - viewportHeight) } });
   const context = await loadContext(['capture-geometry.js', 'capture-session.js', 'capture.js'], {
     window: { addEventListener(type, fn) { if (!events.has(type)) events.set(type, new Set()); events.get(type).add(fn); },
       removeEventListener(type, fn) { events.get(type)?.delete(fn); } },
@@ -33,11 +35,17 @@ async function setup(options = {}) {
       const id = ++stats.allocations;
       const canvas = { width: 0, height: 0, getContext() { return { canvas, fillRect() {},
         drawImage() { stats.draws.push({ id, attempt: owner.snapshot().attempt }); } }; },
-      toBlob(callback) { stats.encodes.push(id); void hold('encoding').then(() => callback(new Blob(options.oversizedPng ? [new Uint8Array(32 * 1024 * 1024 + 1)] : [String(id)], { type: 'image/png' }))); } };
+      toBlob(callback) {
+        stats.encodes.push(id); stats.encodedSizes.push([canvas.width, canvas.height]);
+        if (options.encodingFailure === 'throw' && id === 1) throw new Error('Native encoding failed');
+        void hold('encoding').then(() => callback(options.encodingFailure === 'null' && id === 1 ? null
+          : new Blob(options.oversizedPng ? [new Uint8Array(32 * 1024 * 1024 + 1)] : [String(id)], { type: 'image/png' })));
+      } };
+      stats.canvases.push(canvas);
       return canvas;
     } },
     fetch: async () => { await hold('fetch'); return { blob: async () => new Blob(['tile']) }; },
-    createImageBitmap: async () => { stats.decodes = (stats.decodes || 0) + 1; await hold('bitmap'); return { width: 100, height: 100, close() { stats.closes++; } }; },
+    createImageBitmap: async () => { stats.decodes = (stats.decodes || 0) + 1; await hold('bitmap'); return { width: Math.ceil(viewportWidth * pixelRatio), height: Math.ceil(viewportHeight * pixelRatio), close() { stats.closes++; } }; },
     chrome: { runtime: { id: 'extension',
       onMessage: { addListener(fn) { messages.add(fn); }, removeListener(fn) { messages.delete(fn); } },
       async sendMessage(request) {
@@ -71,7 +79,7 @@ async function setup(options = {}) {
   owner = context.Longform.sessions.install({ run: context.Longform.capture.run, now: () => clock.now() + (stats.elapsed || 0), schedule: clock.schedule });
   const start = () => owner.start({ destination: 'download' });
   const fire = (type, data = {}) => { for (const fn of [...(events.get(type) || [])]) fn({ type, ...data }); };
-  return { owner, stats, clock, start, fire, pending, api: context.Longform.capture, document: context.document, runtime: context.chrome.runtime,
+  return { owner, stats, clock, start, fire, pending, context, api: context.Longform.capture, document: context.document, runtime: context.chrome.runtime,
     notify(patch = {}, sender = { id: 'extension' }) {
       for (const fn of [...messages]) fn({ type: 'CAPTURE_TARGET_LOST', protocolVersion: 6,
         generation: 'worker-one', documentId: owner.snapshot().documentId, sessionId: owner.snapshot().sessionId, ...patch }, sender);
@@ -218,10 +226,114 @@ test('worker interruption still restores page', async () => {
 
 test('memory check precedes allocation', async () => {
   const { owner, start, stats, api } = await setup({ width: 10000, height: 10000 });
-  assert.equal(api.estimateWorkingBytes({ canvasPixels: 100, tilePixels: 10, pngBytes: 20 }), 16778656);
+  assert.ok(api.estimateWorkingBytes({ canvasPixels: 100, tilePixels: 10, pngBytes: 20 }) < 512 * 1024 * 1024);
   start(); await flush();
   assert.equal(owner.snapshot().errorCode, 'page-too-large');
   assert.equal(stats.allocations, 0); assert.equal(stats.restores, 1);
+});
+
+// Summing later transfer copies with the canvas incorrectly rejects this ordinary page.
+test('normal full-size HiDPI page captures at native resolution within the phase budget', async () => {
+  const env = await setup({ width: 1621, height: 4200, viewportWidth: 1621, viewportHeight: 1378, pixelRatio: 1.5 });
+  const { sessionId } = env.start(); await flush();
+  assert.equal(env.owner.snapshot().phase, 'ready-to-deliver');
+  assert.deepEqual(env.stats.encodedSizes, [[2432, 6300]]);
+  assert.equal(await env.owner.artifact(sessionId).text(), '1');
+  assert.equal(env.stats.restores, 1);
+  assert.ok(env.stats.canvases.every((canvas) => canvas.width === 0 && canvas.height === 0));
+  env.owner.dispose();
+});
+
+test('genuinely over-budget HiDPI page rejects before allocation and restores', async () => {
+  const env = await setup({ width: 5000, height: 5000, viewportWidth: 1621, viewportHeight: 1378, pixelRatio: 1.5 });
+  const { sessionId } = env.start(); await flush();
+  assert.equal(env.owner.snapshot().errorCode, 'page-too-large');
+  assert.equal(env.stats.allocations, 0);
+  assert.equal(env.stats.restores, 1);
+  assert.throws(() => env.owner.artifact(sessionId), { code: 'artifact-unavailable' });
+});
+
+// Each case isolates a phase: the other phase fits512MiB at these dimensions.
+test('worst-case encoder and native tile peaks independently reject before allocation', async (t) => {
+  for (const [phase, dimensions] of [
+    ['encoder', { width: 3000, height: 9000, viewportWidth: 3000, viewportHeight: 1000 }],
+    ['tile', { width: 3500, height: 3500, viewportWidth: 3500, viewportHeight: 3500 }],
+  ]) await t.test(phase, async () => {
+    const env = await setup(dimensions);
+    const { sessionId } = env.start(); await flush();
+    assert.equal(env.owner.snapshot().errorCode, 'page-too-large');
+    assert.equal(env.stats.allocations, 0);
+    assert.equal(env.stats.tiles.length, 0);
+    assert.equal(env.stats.restores, 1);
+    assert.throws(() => env.owner.artifact(sessionId), { code: 'artifact-unavailable' });
+  });
+});
+
+test('cancelled native encoding must settle before replacement canvas allocation', async () => {
+  const env = await setup({ hold: 'encoding' });
+  const { sessionId } = env.start(); await flush();
+  assert.equal(env.stats.held, 'encoding');
+  env.owner.cancel(sessionId); await flush();
+  assert.equal(env.owner.snapshot().phase, 'cancelled');
+  assert.ok(env.stats.canvases.every((canvas) => canvas.width === 0 && canvas.height === 0));
+  await inject(env.context, 'capture.js'); // Reinjection must preserve the live native-encoder gate.
+  const next = env.start(); await flush();
+  assert.equal(env.stats.allocations, 1, 'the abandoned encoder still owns its native snapshot');
+  assert.equal(env.stats.preparations, 2, 'replacement has not prepared while the native encoder remains live');
+  env.pending.resolve(); await flush();
+  assert.equal(env.owner.snapshot().sessionId, next.sessionId);
+  assert.equal(env.owner.snapshot().phase, 'ready-to-deliver');
+  assert.equal(await env.owner.artifact(next.sessionId).text(), '2');
+  assert.throws(() => env.owner.artifact(sessionId), { code: 'artifact-unavailable' });
+  env.owner.dispose();
+});
+
+test('replacement waiting for an abandoned encoder honors cancel and external timeout', async (t) => {
+  for (const outcome of ['cancel', 'timeout']) await t.test(outcome, async () => {
+    const env = await setup({ hold: 'encoding' });
+    const first = env.start(); await flush(); env.owner.cancel(first.sessionId); await flush();
+    const next = env.start(); await flush();
+    if (outcome === 'cancel') env.owner.cancel(next.sessionId);
+    else await env.clock.advance(10000);
+    await flush();
+    assert.equal(env.owner.snapshot().phase, outcome === 'cancel' ? 'cancelled' : 'failed');
+    if (outcome === 'timeout') assert.equal(env.owner.snapshot().errorCode, 'external-timeout');
+    env.pending.resolve(); await flush();
+    assert.equal(env.stats.allocations, 1, 'late callback cannot resume the stopped replacement');
+    assert.throws(() => env.owner.artifact(next.sessionId), { code: 'artifact-unavailable' });
+    const third = env.start(); await flush();
+    assert.equal(env.owner.snapshot().phase, 'ready-to-deliver');
+    assert.equal(await env.owner.artifact(third.sessionId).text(), '2');
+    env.owner.dispose();
+  });
+});
+
+test('native encoder wait is bounded by the replacement original work deadline', async () => {
+  const env = await setup({ hold: 'encoding' });
+  const first = env.start(); await flush(); env.owner.cancel(first.sessionId); await flush();
+  const unsubscribe = env.owner.subscribe((state) => {
+    if (state.phase === 'preparing' && state.sessionId !== first.sessionId) env.stats.elapsed = 119500;
+  });
+  const next = env.start(); await flush();
+  await env.clock.advance(500);
+  assert.equal(env.owner.snapshot().errorCode, 'work-timeout');
+  assert.equal(env.stats.allocations, 1);
+  env.pending.resolve(); await flush();
+  assert.throws(() => env.owner.artifact(next.sessionId), { code: 'artifact-unavailable' });
+  assert.equal(env.stats.allocations, 1);
+  unsubscribe(); env.owner.dispose();
+});
+
+test('native encoding failure clears the gate for a new capture', async (t) => {
+  for (const encodingFailure of ['null', 'throw']) await t.test(encodingFailure, async () => {
+    const env = await setup({ encodingFailure });
+    env.start(); await flush();
+    assert.equal(env.owner.snapshot().phase, 'failed');
+    const next = env.start(); await flush();
+    assert.equal(env.owner.snapshot().phase, 'ready-to-deliver');
+    assert.equal(await env.owner.artifact(next.sessionId).text(), '2');
+    env.owner.dispose();
+  });
 });
 
 test('user input and pagehide stop suspended work without suppressing events', async (t) => {
@@ -283,8 +395,12 @@ test('total deadline survives retry and stalled screenshot timeout', async () =>
 });
 
 test('encoded PNG cap rejects after restored state', async () => {
-  const { owner, start, stats } = await setup({ oversizedPng: true }); start(); await flush();
+  const { owner, start, stats } = await setup({ oversizedPng: true, width: 1621, height: 4200, viewportWidth: 1621, viewportHeight: 1378, pixelRatio: 1.5 });
+  const { sessionId } = start(); await flush();
   assert.equal(owner.snapshot().errorCode, 'page-too-large'); assert.equal(stats.restores, 1);
+  assert.deepEqual(stats.encodedSizes, [[2432, 6300]]);
+  assert.ok(stats.canvases.every((canvas) => canvas.width === 0 && canvas.height === 0));
+  assert.throws(() => owner.artifact(sessionId), { code: 'artifact-unavailable' });
 });
 
 

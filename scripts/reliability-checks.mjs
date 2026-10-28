@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 // This file is injected only into the disposable test bundle's isolated world.
@@ -48,6 +48,17 @@ export const reliabilityWorldScript = `
     return nativeScroll(...args);
   };
   const nativeBitmap = globalThis.createImageBitmap.bind(globalThis);
+  const nativeToBlob = HTMLCanvasElement.prototype.toBlob, canvases = [], encodings = [];
+  const nativeCreateElement = document.createElement.bind(document);
+  document.createElement = (...args) => {
+    const element = nativeCreateElement(...args);
+    if (String(args[0]).toLowerCase() === 'canvas') canvases.push(element);
+    return element;
+  };
+  HTMLCanvasElement.prototype.toBlob = function(callback, ...args) {
+    const size = { width: this.width, height: this.height };
+    return nativeToBlob.call(this, (blob) => { encodings.push({ ...size, bytes: blob?.size || 0 }); callback(blob); }, ...args);
+  };
   globalThis.createImageBitmap = async (...args) => {
     const bitmap = await nativeBitmap(...args);
     if (config.holdBitmap && !bitmapHeld) {
@@ -95,7 +106,16 @@ export const reliabilityWorldScript = `
     configure(next) { Object.assign(config, next); },
     snapshot: () => owner.snapshot(),
     events: () => events,
-    stats: () => ({ captureCalls, draws, tileHeld, digestHeld, bitmapHeld, coverageResult }),
+    stats: () => {
+      const metrics = Longform.page.measure(), size = Longform.geometry.getCanvasSize(metrics);
+      const canvasPixels = size.width * size.height;
+      const tilePixels = Math.ceil(metrics.viewportWidth * metrics.pixelRatio) * Math.ceil(metrics.viewportHeight * metrics.pixelRatio);
+      const pngReserveBytes = Longform.capture.estimatePngBytes(canvasPixels, size.height);
+      return { captureCalls, draws, tileHeld, digestHeld, bitmapHeld, coverageResult, encodings,
+        liveCanvases: canvases.filter((canvas) => canvas.width && canvas.height).length,
+        memory: { canvasPixels, tilePixels, pngReserveBytes,
+          capturePeakBytes: Longform.capture.estimateWorkingBytes({ canvasPixels, tilePixels, pngBytes: pngReserveBytes }) } };
+    },
     releaseTile() { releaseTile?.(); },
     releaseDigest() { releaseDigest?.(); },
     releaseBitmap() { releaseBitmap?.(); },
@@ -190,6 +210,87 @@ export async function runReliabilityChecks({ browserContext, serviceWorker, base
       return { width: canvas.width, height: canvas.height, interiorMissingPixels, wrongTabPixels, bytes: blob.size };
     });
   }
+
+  await scenario('hidpi-normal-window-full-resolution-save', async () => {
+    const test = await setup('dark-footer.html');
+    const cdp = await browserContext.newCDPSession(test.target);
+    try {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1621, height: 1378, deviceScaleFactor: 1.5, mobile: false });
+      const metrics = await test.target.evaluate(() => ({ width: innerWidth, height: innerHeight, ratio: devicePixelRatio,
+        pageHeight: document.scrollingElement.scrollHeight,
+        marker: (() => { const rect = document.querySelector('[data-longform-end-marker]').getBoundingClientRect();
+          return { left: rect.left, top: rect.top + scrollY, right: rect.right, bottom: rect.bottom + scrollY }; })() }));
+      assert.deepEqual([metrics.width, metrics.height, metrics.ratio, metrics.pageHeight], [1621, 1378, 1.5, 4200]);
+      await test.start(); const state = await test.wait();
+      assert.equal(state.phase, 'ready-to-deliver'); await restored(test);
+      const download = test.clientPage.waitForEvent('download');
+      const artifactBytes = await test.clientPage.evaluate(async () => {
+        const { blob, transferId } = await reliabilityClient.artifact();
+        await reliabilityClient.commit(transferId);
+        Longform.delivery.save(blob, 'reliability-hidpi-dark-footer.png');
+        await reliabilityClient.result(transferId, 'success');
+        return blob.size;
+      });
+      const saved = path.join(artifactsDir, 'reliability-hidpi-dark-footer.png');
+      await (await download).saveAs(saved);
+      const bytes = await readFile(saved);
+      assert.equal(bytes.length, artifactBytes);
+      const image = await test.clientPage.evaluate(async ({ bytes, marker }) => {
+        const bitmap = await createImageBitmap(new Blob([Uint8Array.from(bytes)], { type: 'image/png' }));
+        const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
+        const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0); bitmap.close();
+        const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let transparentPixels = 0, missingBackgroundPixels = 0, missingFooterPixels = 0;
+        for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+          const i = (y * canvas.width + x) * 4;
+          if (data[i + 3] !== 255) transparentPixels++;
+          // Every row includes untextured interior background, away from scrollbar.
+          if (x >= 20 && x < 40 && (data[i] !== 17 || data[i + 1] !== 24 || data[i + 2] !== 32)) missingBackgroundPixels++;
+          // A broad untextured strip inside the footer must survive full-height stitching.
+          if (x > (marker.left + 4) * 1.5 && x < (marker.right - 4) * 1.5
+              && y > (marker.top + 4) * 1.5 && y < (marker.top + 10) * 1.5
+              && (data[i] !== 255 || data[i + 1] !== 59 || data[i + 2] !== 138)) missingFooterPixels++;
+        }
+        return { width: canvas.width, height: canvas.height, transparentPixels, missingBackgroundPixels, missingFooterPixels };
+      }, { bytes: [...bytes], marker: metrics.marker });
+      assert.deepEqual(image, { width: 2432, height: 6300, transparentPixels: 0, missingBackgroundPixels: 0, missingFooterPixels: 0 });
+      const stats = await isolated(test.tabId, 'stats');
+      assert.equal(stats.coverageResult.complete, true);
+      assert.equal(stats.liveCanvases, 0);
+      assert.ok(stats.memory.capturePeakBytes < 512 * 1024 * 1024);
+      return { metrics, ...image, artifactBytes, memory: stats.memory, coverageResult: stats.coverageResult, restored: true, savedAndDecoded: true };
+    } finally { await cdp.detach(); await test.close(); }
+  });
+
+  for (const kind of ['over-budget', 'incompressible']) await scenario(`hidpi-${kind}-rejection-and-cleanup`, async () => {
+    const test = await setup('dark-footer.html');
+    const cdp = await browserContext.newCDPSession(test.target);
+    try {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1621, height: 1378, deviceScaleFactor: 1.5, mobile: false });
+      await test.target.evaluate((kind) => {
+        if (kind === 'over-budget') { document.body.style.width = '5000px'; document.body.style.height = '5000px'; return; }
+        const canvas = document.createElement('canvas'); canvas.width = 2432; canvas.height = 6300;
+        canvas.style.cssText = 'display:block;width:100%;height:4200px';
+        const context = canvas.getContext('2d'), image = context.createImageData(canvas.width, canvas.height);
+        let seed = 0x12345678;
+        for (let i = 0; i < image.data.length; i += 4) {
+          seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+          image.data[i] = seed & 255; image.data[i + 1] = (seed >>> 8) & 255; image.data[i + 2] = (seed >>> 16) & 255; image.data[i + 3] = 255;
+        }
+        context.putImageData(image, 0, 0); document.body.replaceChildren(canvas);
+      }, kind);
+      test.expectedRestoredState = await test.livePageState();
+      await test.start(); const state = await test.wait();
+      assert.equal(state.phase, 'failed'); assert.equal(state.errorCode, 'page-too-large'); await restored(test);
+      const stats = await isolated(test.tabId, 'stats');
+      assert.equal(stats.liveCanvases, 0);
+      if (kind === 'over-budget') { assert.equal(stats.captureCalls, 0); assert.equal(stats.encodings.length, 0); assert.ok(stats.memory.capturePeakBytes > 512 * 1024 * 1024); }
+      else { assert.ok(stats.captureCalls > 0); assert.equal(stats.coverageResult.complete, true); assert.ok(stats.encodings[0].bytes > 32 * 1024 * 1024); }
+      await assert.rejects(() => test.clientPage.evaluate(() => reliabilityClient.artifact()));
+      return { errorCode: state.errorCode, captureCalls: stats.captureCalls, memory: stats.memory, encodings: stats.encodings,
+        liveCanvases: stats.liveCanvases, restored: true, output: false };
+    } finally { await cdp.detach(); await test.close(); }
+  });
 
   await scenario('hostile-page-secure-save-and-complete-interior', async () => {
     const test = await setup('hostile-download.html');

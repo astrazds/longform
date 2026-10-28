@@ -5,20 +5,31 @@
   const coded = (code) => Object.assign(new Error(code), { code });
   const MAX_SECTIONS = 2048;
   const scrollKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End', ' ', 'Spacebar']);
+  let pendingEncoder = Promise.resolve();
 
-  /** Conservative working-set estimate, not a guarantee of browser RSS. */
+  /** Conservative peak of capture and encoding, not a browser RSS guarantee.
+   * 12P reserves canvas backing/native copies. Capture additionally reserves
+   * 32T for two UTF-16 base64 screenshot strings, PNG Blob and decoded bitmap.
+   * Tiles are closed before encoding, which reserves two worst-case PNG buffers.
+   * Worker/popup transfer is checked separately after this canvas is released.
+   */
   function estimateWorkingBytes({ canvasPixels, tilePixels, pngBytes }) {
     if (![canvasPixels, tilePixels, pngBytes].every((n) => Number.isFinite(n) && n >= 0)) return Infinity;
-    return 12 * canvasPixels + 8 * tilePixels + 8 * pngBytes + limits.digestOverheadBytes;
+    return 12 * canvasPixels + Math.max(32 * tilePixels, 2 * pngBytes) + limits.digestOverheadBytes;
+  }
+  function estimatePngBytes(canvasPixels, height) {
+    // RGBA plus row filters, stored-deflate block/chunk overhead and headers.
+    // Never infer compressibility or reject solely because this exceeds 32MiB:
+    // the actual encoded Blob is checked against that artifact cap separately.
+    if (![canvasPixels, height].every((n) => Number.isFinite(n) && n >= 0)) return Infinity;
+    const raw = canvasPixels * 4 + height;
+    return raw + Math.ceil(raw / 16383) * 5 + Math.ceil(raw / 32768) * 12 + 1024;
   }
   function memoryFor(metrics, pngBytes) {
     const size = geometry.getCanvasSize(metrics);
     const canvasPixels = size.width * size.height;
     const tilePixels = Math.ceil(metrics.viewportWidth * metrics.pixelRatio) * Math.ceil(metrics.viewportHeight * metrics.pixelRatio);
-    // Reserve uncompressed RGBA plus row filters, conservative stored-deflate
-    // block/chunk overhead and headers. Never assume image compressibility.
-    const raw = canvasPixels * 4 + size.height;
-    const reserve = raw + Math.ceil(raw / 16383) * 5 + Math.ceil(raw / 32768) * 12 + 1024;
+    const reserve = estimatePngBytes(canvasPixels, size.height);
     if (estimateWorkingBytes({ canvasPixels, tilePixels, pngBytes: pngBytes ?? reserve }) > limits.workingMemoryBytes) throw coded('page-too-large');
     return size;
   }
@@ -147,6 +158,10 @@
     }
     try {
       checkpoint();
+      // Cancel/timeout frees the canvas immediately, but cannot cancel toBlob's
+      // native snapshot. A replacement waits for that callback before allocating
+      // or preparing, so abandoned encoders cannot accumulate outside the peak.
+      await guarded(() => pendingEncoder); checkpoint();
       transaction = Longform.page.beginTransaction(localCtx);
       const hello = await guarded(() => chrome.runtime.sendMessage({ type: 'BROKER_HELLO', protocolVersion,
         documentId: ctx.documentId, sessionId: ctx.sessionId }), (late) => releaseActivity(late?.generation)); checkpoint();
@@ -248,7 +263,10 @@
     return { promise, dispose: () => signal.removeEventListener('abort', listener) };
   }
   function canvasToPngBlob(canvas) {
-    return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(coded('encoding-failed')), 'image/png'));
+    const encoding = new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(coded('encoding-failed')), 'image/png'));
+    // This fulfilled-only gate survives cancellation and same-version reinjection.
+    pendingEncoder = encoding.then(() => {}, () => {});
+    return encoding;
   }
-  Longform.capture = Object.freeze({ run, estimateWorkingBytes });
+  Longform.capture = Object.freeze({ run, estimateWorkingBytes, estimatePngBytes });
 })();

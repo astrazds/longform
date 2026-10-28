@@ -69,8 +69,10 @@ const setState = (patch) => { window.__longformSmoke = { ...(window.__longformSm
       const canvas = Longform.geometry.getCanvasSize(metrics);
       const canvasPixels = canvas.width * canvas.height;
       const tilePixels = Math.ceil(metrics.viewportWidth * metrics.pixelRatio) * Math.ceil(metrics.viewportHeight * metrics.pixelRatio);
-      return { captureWorkingBytes: Longform.capture.estimateWorkingBytes({ canvasPixels, tilePixels, pngBytes }),
-        transferWorkingBytes: Longform.transfer.estimateWorkingBytes(pngBytes, canvasPixels), canvasPixels, tilePixels, pngBytes };
+      const pngReserveBytes = Longform.capture.estimatePngBytes(canvasPixels, canvas.height);
+      return { captureWorkingBytes: Longform.capture.estimateWorkingBytes({ canvasPixels, tilePixels, pngBytes: pngReserveBytes }),
+        encodedCaptureWorkingBytes: Longform.capture.estimateWorkingBytes({ canvasPixels, tilePixels, pngBytes }),
+        transferWorkingBytes: Longform.transfer.estimateWorkingBytes(pngBytes, canvasPixels), canvasPixels, tilePixels, pngBytes, pngReserveBytes };
     } });
   await client.commit(transferId);
   Longform.delivery.save(blob, filename);
@@ -229,8 +231,9 @@ async function compareBaseline(captureResults) {
       const canvasPixels = diagnostics.canvas.width * diagnostics.canvas.height;
       const tilePixels = Math.ceil(diagnostics.metrics.viewportWidth * diagnostics.metrics.pixelRatio)
         * Math.ceil(diagnostics.metrics.viewportHeight * diagnostics.metrics.pixelRatio);
-      const pngBytes = previous.smokeResult.artifact.byteSize;
-      const baselineEstimatedCaptureBytes = 12 * canvasPixels + 8 * tilePixels + 8 * pngBytes + 16 * 1024 * 1024;
+      const raw = canvasPixels * 4 + diagnostics.canvas.height;
+      const pngReserveBytes = raw + Math.ceil(raw / 16383) * 5 + Math.ceil(raw / 32768) * 12 + 1024;
+      const baselineEstimatedCaptureBytes = 12 * canvasPixels + Math.max(32 * tilePixels, 2 * pngReserveBytes) + 16 * 1024 * 1024;
       return { label: current.label, baselineDurationMs, durationMs, durationRatio: Number((durationMs / baselineDurationMs).toFixed(3)),
         baselineEstimatedCaptureBytes, estimatedMemory: current.smokeResult.estimatedMemory };
     }) };

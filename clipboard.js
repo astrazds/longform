@@ -7,8 +7,20 @@
     ready: Object.freeze({ phase: 'ready', text: '' }),
     saving: Object.freeze({ phase: 'saving', text: 'Saving...' }),
     copying: Object.freeze({ phase: 'copying', text: 'Copying...' }),
-    saved: Object.freeze({ phase: 'saved', text: 'Saved.' }),
+    saved: Object.freeze({ phase: 'saved', text: 'Download started.' }),
     copied: Object.freeze({ phase: 'copied', text: 'Copied.' }),
+    'delivery-unknown': Object.freeze({ phase: 'error', text: 'Delivery may have completed. Choose Save or Copy to try again.' }),
+    'reload-required': Object.freeze({ phase: 'blocked', text: 'Reload this page, then try again.' }),
+    'artifact-expired': Object.freeze({ phase: 'error', text: 'Capture expired. Choose Save or Copy to capture again.' }),
+    'incomplete-coverage': Object.freeze({ phase: 'error', text: 'This page could not be captured completely. Try another page.' }),
+    'unstable-page': Object.freeze({ phase: 'error', text: 'This page kept changing. Wait for it to settle, then try again.' }),
+    'preparation-changed': Object.freeze({ phase: 'error', text: 'This page changed during preparation. Wait for it to settle, then try again.' }),
+    'resource-timeout': Object.freeze({ phase: 'error', text: 'Page images did not finish loading. Wait, then try again.' }),
+    'work-timeout': Object.freeze({ phase: 'error', text: 'Capture took too long. Try a shorter page.' }),
+    'target-changed': Object.freeze({ phase: 'error', text: 'The active page changed. Keep this page active, then try again.' }),
+    'worker-interrupted': Object.freeze({ phase: 'error', text: 'Capture was interrupted. Try again.' }),
+    'cleanup-failed': Object.freeze({ phase: 'blocked', text: 'The page could not be restored. Reload it, then try again.' }),
+    'transfer-failed': Object.freeze({ phase: 'error', text: 'The PNG could not be transferred. Reopen Longform, then choose Save or Copy.' }),
     'page-too-large': Object.freeze({
       phase: 'blocked',
       text: 'This page is too large for one PNG. Try another page.',
@@ -64,65 +76,6 @@
 
   const CAPTURE_PHRASES = new Set(['page-too-large', 'incomplete', 'blocked']);
 
-  function base64ToUint8Array(base64) {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-
-    return bytes;
-  }
-
-  function isPngBytes(bytes) {
-    return bytes.length >= 8
-      && bytes[0] === 0x89
-      && bytes[1] === 0x50
-      && bytes[2] === 0x4e
-      && bytes[3] === 0x47
-      && bytes[4] === 0x0d
-      && bytes[5] === 0x0a
-      && bytes[6] === 0x1a
-      && bytes[7] === 0x0a;
-  }
-
-  function pngBase64ToBlob(base64) {
-    if (typeof base64 !== 'string' || !base64) {
-      const error = new Error('Capture did not return image data for the clipboard');
-      error.code = 'copy-invalid';
-      throw error;
-    }
-
-    const bytes = base64ToUint8Array(base64);
-    if (!bytes.length) {
-      const error = new Error('Capture returned empty PNG data for the clipboard');
-      error.code = 'copy-invalid';
-      throw error;
-    }
-
-    if (!isPngBytes(bytes)) {
-      const error = new Error('Capture returned invalid PNG data for the clipboard');
-      error.code = 'copy-invalid';
-      throw error;
-    }
-
-    return new Blob([bytes], { type: 'image/png' });
-  }
-
-  async function pngBlobToBase64(blob) {
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    const chunkSize = 0x8000;
-    let binary = '';
-
-    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-      const chunk = bytes.subarray(offset, offset + chunkSize);
-      binary += String.fromCharCode.apply(null, chunk);
-    }
-
-    return btoa(binary);
-  }
-
   function classifyWriteError(error) {
     if (phrases[error?.code]) return error.code;
 
@@ -154,55 +107,55 @@
     return classifyWriteError(captureError);
   }
 
-  async function copyDuringGesture(startCapture) {
-    if (globalThis.location?.protocol !== 'chrome-extension:') {
-      throw new Error('clipboard write runs in the popup');
-    }
-
-    if (!canCopyArtifact()) {
-      return { phrase: 'copy-unavailable' };
-    }
-
-    let settled;
-    const capturePromise = Promise.resolve()
-      .then(startCapture)
-      .then((record) => {
-        if (record?.errorCode) {
-          const error = new Error(record.error || 'Capture failed');
-          error.code = record.errorCode;
-          throw error;
-        }
-        return pngBase64ToBlob(record.clipboardPngBase64);
-      })
-      .catch((error) => {
-        settled = error;
-        throw error;
-      });
-
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'image/png': capturePromise,
-        }),
-      ]);
-      await capturePromise;
-    } catch (writeError) {
-      try {
-        await capturePromise;
-      } catch (pending) {
-        settled = pending;
+  /** Callback resolves a validated Blob only after delivery commit succeeds. */
+  async function copyBlobDuringGesture(getCommittedBlob, { signal } = {}) {
+    if (globalThis.location?.protocol !== 'chrome-extension:') throw new Error('clipboard write runs in the popup');
+    if (!canCopyArtifact()) return { phrase: 'copy-unavailable', deliveryOutcome: 'failed' };
+    let captureError;
+    const blobPromise = Promise.resolve().then(getCommittedBlob).then((blob) => {
+      if (!(blob instanceof Blob) || blob.type !== 'image/png' || !blob.size) {
+        throw Object.assign(new Error('Invalid PNG'), { code: 'copy-invalid' });
       }
-      return { phrase: phraseForFailure(settled, writeError) };
+      return blob;
+    }).catch((error) => { captureError = error; throw error; });
+    // Attach a rejection handler even if ClipboardItem throws synchronously.
+    blobPromise.catch(() => {});
+    let native;
+    try {
+      // Initiate synchronously, even though the PNG and commit are pending.
+      native = Promise.resolve(navigator.clipboard.write([new ClipboardItem({ 'image/png': blobPromise })]));
+    } catch (error) { native = Promise.reject(error); }
+    // Observe early native rejection while still awaiting capture/cleanup.
+    const acknowledgement = native.then(() => ({ ok: true }), (error) => ({ error }));
+    try {
+      await blobPromise;
+      const result = await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (error, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer); signal?.removeEventListener('abort', unknown);
+          if (error) reject(error); else resolve(value);
+        };
+        const unknown = () => finish(Object.assign(new Error('delivery-unknown'), { code: 'delivery-unknown' }));
+        // This bound begins only after the validated Blob crosses commit.
+        const timer = setTimeout(unknown, Longform.protocol.limits.externalMs);
+        signal?.addEventListener('abort', unknown, { once: true });
+        if (signal?.aborted) unknown();
+        acknowledgement.then((value) => finish(null, value));
+      });
+      if (result.error) throw result.error;
+      return { phrase: 'copied', deliveryOutcome: 'success' };
+    } catch (writeError) {
+      try { await blobPromise; } catch (error) { captureError = error; }
+      return { phrase: phraseForFailure(captureError, writeError),
+        deliveryOutcome: captureError?.code === 'delivery-unknown' || writeError?.code === 'delivery-unknown' ? 'unknown' : 'failed' };
     }
-
-    return { phrase: 'copied' };
   }
 
   Longform.clipboard = Object.freeze({
     canCopyArtifact,
     phrases,
-    pngBase64ToBlob,
-    pngBlobToBase64,
-    copyDuringGesture,
+    copyBlobDuringGesture,
   });
 })();

@@ -19,13 +19,20 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
     const attached = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     const popup = attached.contexts()[0].pages().find((page) => page.url().endsWith('/popup.html'));
     assert.ok(popup, 'The actual toolbar popup opened');
+    popup.on('pageerror', (error) => console.error('Popup page error:', error.message));
     await popup.waitForFunction(() => (
-      document.getElementById('status').textContent === ''
+      ['', 'Download started.', 'Copied.'].includes(document.getElementById('status').textContent)
       && !document.getElementById('screenshotBtn').disabled
       && !document.getElementById('copyBtn').disabled
-    ));
+    )).catch(async (error) => { throw new Error(`${error.message}; initial popup: ${await popup.locator('body').innerText()}`); });
 
     if (destination === 'save') {
+      await popup.evaluate(() => {
+        window.sectionAnnouncements = [];
+        new MutationObserver(() => {
+          if (document.getElementById('status').textContent.startsWith('Capturing section')) window.sectionAnnouncements.push(Date.now());
+        }).observe(document.getElementById('status'), { childList: true });
+      });
       await popup.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
       const idleState = await popup.evaluate(() => {
         const saveButton = document.getElementById('screenshotBtn');
@@ -92,20 +99,25 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
       await popup.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
     }
 
-    const attachedTarget = attached.contexts()[0].pages().find((page) => page.url() === target.url());
-    const downloadPromise = destination === 'save' ? attachedTarget.waitForEvent('download') : null;
+    const downloadPromise = destination === 'save' ? popup.waitForEvent('download') : null;
+    downloadPromise?.catch(() => {});
     await popup.locator(destination === 'save' ? '#screenshotBtn' : '#copyBtn').click();
-    const busyStatus = destination === 'save' ? 'Saving...' : 'Copying...';
+    const busyStatus = 'Preparing page…';
     await popup.waitForFunction((expected) => (
       document.getElementById('status').textContent === expected
     ), busyStatus);
     assert.equal(await popup.locator('#screenshotBtn').isDisabled(), true);
     assert.equal(await popup.locator('#copyBtn').isDisabled(), true);
+    assert.equal(await popup.locator('#cancelBtn').isVisible(), true);
+    assert.equal(await popup.locator('#cancelBtn').evaluate((button) => button.getBoundingClientRect().height >= 44), true);
+    assert.equal(await popup.locator('#progress').evaluate((element) => !element.hasAttribute('value')), true);
+    assert.equal(await popup.locator('#screenshotBtn').textContent(), 'Save');
+    assert.equal(await popup.locator('#copyBtn').textContent(), 'Copy');
     if (destination === 'save') {
       await popup.screenshot({ path: path.join(artifactsDir, 'popup-saving.png'), animations: 'disabled' });
     }
 
-    const expectedStatus = destination === 'save' ? 'Saved.' : 'Copied.';
+    const expectedStatus = destination === 'save' ? 'Download started.' : 'Copied.';
     await popup.waitForFunction((expected) => (
       document.getElementById('status').textContent === expected
       || document.getElementById('status').classList.contains('error')
@@ -115,6 +127,8 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
     assert.equal(await popup.locator('#status').getAttribute('class'), 'status success');
     assert.equal(await popup.locator('#screenshotBtn').isEnabled(), true);
     assert.equal(await popup.locator('#copyBtn').isEnabled(), true);
+    const announcements = await popup.evaluate(() => window.sectionAnnouncements || []);
+    for (let index = 1; index < announcements.length; index++) assert.ok(announcements[index] - announcements[index - 1] >= 990, 'Section announcements are at most once per second');
     assert.deepEqual(await pageState(target), originalState, 'Capture restores scroll and inline styles');
     await popup.screenshot({
       path: path.join(artifactsDir, destination === 'save' ? 'popup-saved.png' : 'popup-copied.png'),
@@ -155,8 +169,7 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
       .find((page) => page.url().endsWith('/popup.html'));
     assert.ok(popup, 'The toolbar popup opened for clipboard failure coverage');
     await popup.waitForFunction(() => (
-      document.getElementById('status').textContent === ''
-      && !document.getElementById('copyBtn').disabled
+      !document.getElementById('copyBtn').disabled
     ));
     await popup.evaluate(() => {
       Object.defineProperty(navigator.clipboard, 'write', {
@@ -169,7 +182,7 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
     });
     await popup.locator('#copyBtn').click();
     await popup.waitForFunction(() => document.documentElement.dataset.clipboardWriteRejected === 'true');
-    assert.equal(await popup.locator('#status').textContent(), 'Copying...');
+    assert.equal(await popup.locator('#cancelBtn').isVisible(), true);
     assert.equal(await popup.locator('#screenshotBtn').isDisabled(), true);
     assert.equal(await popup.locator('#copyBtn').isDisabled(), true);
     await popup.waitForFunction(() => document.getElementById('status').classList.contains('error'), null, {
@@ -184,6 +197,17 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
       'Early clipboard rejection still waits for capture to restore page state'
     );
     await popup.screenshot({ path: path.join(artifactsDir, 'popup-copy-error.png'), animations: 'disabled' });
+    // Retained PNG recovery must not call the capture broker again.
+    await serviceWorker.evaluate(() => {
+      globalThis.recoveryCapture = chrome.tabs.captureVisibleTab;
+      chrome.tabs.captureVisibleTab = async () => { throw new Error('Recovery recaptured'); };
+    });
+    const recoveryDownload = popup.waitForEvent('download');
+    recoveryDownload.catch(() => {});
+    await popup.locator('#screenshotBtn').click();
+    await popup.waitForFunction(() => document.getElementById('status').textContent === 'Download started.');
+    await recoveryDownload;
+    await serviceWorker.evaluate(() => { chrome.tabs.captureVisibleTab = globalThis.recoveryCapture; delete globalThis.recoveryCapture; });
     results.push({ destination: 'copy-failure', restored: true });
     await popup.close();
   } finally {
@@ -201,8 +225,7 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
     failureConnection = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     const popup = failureConnection.contexts()[0].pages().find((page) => page.url().endsWith('/popup.html'));
     await popup.waitForFunction(() => (
-      document.getElementById('status').textContent === ''
-      && !document.getElementById('screenshotBtn').disabled
+      !document.getElementById('screenshotBtn').disabled
     ));
     await popup.locator('#screenshotBtn').click();
     await popup.waitForFunction(() => document.getElementById('status').classList.contains('error'));
@@ -223,6 +246,62 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
     });
     await failureConnection?.close();
   }
+
+  // Cancel leaves focus on an available action after cleanup.
+  await target.bringToFront();
+  await serviceWorker.evaluate(() => chrome.action.openPopup());
+  const cancelConnection = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+  let popup = cancelConnection.contexts()[0].pages().find((page) => page.url().endsWith('/popup.html'));
+  await popup.waitForFunction(() => !document.getElementById('screenshotBtn').disabled);
+  await popup.locator('#screenshotBtn').click();
+  await popup.locator('#cancelBtn').focus();
+  await popup.keyboard.press('Enter');
+  await popup.waitForFunction(() => document.getElementById('status').textContent === 'Cancelled.').catch(async (error) => { throw new Error(`${error.message}; cancel state: ${await popup.locator('body').innerText()}`); });
+  assert.equal(await popup.locator('#cancelBtn').isHidden(), true);
+  assert.equal(await popup.locator('#screenshotBtn').evaluate((button) => document.activeElement === button), true);
+  assert.deepEqual(await pageState(target), originalState, 'Cancel completes restoration');
+  results.push({ destination: 'cancel', restored: true, focus: true });
+  await popup.close(); await cancelConnection.close();
+
+  // Closing a subscription cannot cancel or deliver; a reopened popup keeps
+  // the same session and requires a fresh retained-image gesture.
+  await target.bringToFront();
+  await serviceWorker.evaluate(() => chrome.action.openPopup());
+  const firstConnection = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+  popup = firstConnection.contexts()[0].pages().find((page) => page.url().endsWith('/popup.html'));
+  await popup.waitForFunction(() => !document.getElementById('screenshotBtn').disabled);
+  await popup.locator('#screenshotBtn').click();
+  const [targetTab] = await serviceWorker.evaluate(async (url) => chrome.tabs.query({}).then((tabs) => tabs.filter((tab) => tab.url === url)), target.url());
+  const readSnapshot = () => serviceWorker.evaluate(async (tabId) => {
+    const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => Longform.sessions.install().snapshot() });
+    return result.result;
+  }, targetTab.id);
+  const originalSession = await readSnapshot();
+  await popup.close(); await firstConnection.close();
+  await target.bringToFront(); await serviceWorker.evaluate(() => chrome.action.openPopup());
+  const reopenedConnection = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+  popup = reopenedConnection.contexts()[0].pages().find((page) => page.url().endsWith('/popup.html'));
+  await popup.waitForFunction(() => document.getElementById('status').textContent === 'Capture ready. Choose Save or Copy.', null, { timeout: 45000 });
+  assert.equal((await readSnapshot()).sessionId, originalSession.sessionId);
+  await serviceWorker.evaluate(() => {
+    globalThis.recoveryCapture = chrome.tabs.captureVisibleTab;
+    chrome.tabs.captureVisibleTab = async () => { throw new Error('Reopen recovery recaptured'); };
+  });
+  const retainedDownload = popup.waitForEvent('download'); retainedDownload.catch(() => {});
+  await popup.locator('#screenshotBtn').click();
+  await popup.waitForFunction(() => document.getElementById('status').textContent === 'Download started.');
+  await retainedDownload;
+  await serviceWorker.evaluate(() => { chrome.tabs.captureVisibleTab = globalThis.recoveryCapture; delete globalThis.recoveryCapture; });
+  results.push({ destination: 'reopen', sameSession: true, restored: true, recaptured: false });
+  await popup.close(); await reopenedConnection.close();
+  // Secondary CDP connections install their own download behavior. Restore the
+  // persistent context's GUID directory before later reliability downloads.
+  const downloadsSession = await browserContext.browser().newBrowserCDPSession();
+  await downloadsSession.send('Browser.setDownloadBehavior', {
+    behavior: 'allowAndName', downloadPath: path.join(artifactsDir, 'downloads'), eventsEnabled: true,
+  });
+  // Keep this browser session alive until the persistent context closes.
+  // Detaching a Browser download handler resets the browser-wide behavior.
   await target.close();
   return results;
 }

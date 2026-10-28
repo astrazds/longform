@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Longform hostile download listener</title>
+<style>body { margin: 0; height: 1500px; background: rgb(24, 164, 96); }</style>
+<script>
+  window.pageObservedScreenshotUrls = [];
+  window.pageReadScreenshotBytes = false;
+  const inspect = (value) => {
+    if (typeof value !== 'string' || !/^(blob:|data:image\/png)/.test(value)) return;
+    pageObservedScreenshotUrls.push(value);
+    fetch(value).then((response) => response.arrayBuffer()).then((bytes) => {
+      if (bytes.byteLength > 0) pageReadScreenshotBytes = true;
+    }).catch(() => {});
+  };
+  new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === 'attributes') inspect(record.target.getAttribute(record.attributeName));
+      for (const node of record.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        for (const element of [node, ...node.querySelectorAll('*')]) {
+          for (const attribute of element.attributes) inspect(attribute.value);
+        }
+      }
+    }
+  }).observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+  addEventListener('click', (event) => {
+    if (event.target.closest('a[download]')) { inspect(event.target.href); event.preventDefault(); event.stopImmediatePropagation(); }
+  }, true);
+  addEventListener('message', (event) => inspect(typeof event.data === 'string' ? event.data : JSON.stringify(event.data)));
+</script>

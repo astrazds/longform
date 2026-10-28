@@ -17,7 +17,7 @@ The [popup](../popup.html) shows **Full-page screenshot**, **Save**, and
 step, source selector, settings panel, or image editor.
 
 The popup is quiet when ready. During capture, both buttons are disabled and
-one status message reports progress. Success is **Saved.** or **Copied.**
+one status message reports progress. Success is **Download started.** or **Copied.**
 Errors give a short recovery instruction. Unsupported pages disable both
 actions; unsupported clipboard writes leave Save available.
 
@@ -37,10 +37,40 @@ coverage check. This does not guarantee pixel-perfect output for every
 dynamic page. Browser fixtures cover specific layouts; visual inspection is
 still needed after capture changes.
 
-Save downloads the PNG from the content script. Copy returns image data to
-the popup and depends on browser clipboard support and message-size limits.
-The popup must remain open until the operation finishes. See
-[architecture](architecture.md) for delivery and cleanup details.
+Both destinations receive a validated PNG through bounded, acknowledged chunks
+in the extension popup. Save uses an extension-origin download link; page
+listeners cannot fetch the screenshot URL or cancel that link. Copy depends on
+browser PNG clipboard support. **Download started.** confirms the browser
+handoff, not that a file reached disk.
+
+Capture supports ordinary documents with a finite root scroll surface and
+horizontal overflow. It does not traverse nested scrollers, virtualized lists,
+infinite feeds or iframe interiors. Fixed/sticky elements remain deliberately
+absent from the PNG. CSS animations and transitions pause temporarily, while
+page JavaScript, video and canvas updates can continue. There is no atomic
+snapshot guarantee for a changing application.
+
+Capture has a 120-second active-work deadline, 10-second external-operation
+limits, and one complete retry for page changes. Missing interior or edge
+coverage, unstable content and stalled resources fail with a recovery action.
+Switching tabs or user scrolling can interrupt the session; Longform does not
+switch the tab back or suppress the user's input.
+
+## Cancellation and recovery
+
+Cancel stays available during preparation, capture, restoration, encoding and
+transfer. It ends at delivery commit, just before Save hands off or Copy resolves
+its image promise. A download or clipboard write already handed off cannot be
+undone. If the popup disconnects at commit, the outcome is reported as unknown
+and delivery is never silently repeated.
+
+Closing the popup keeps capture running while the document remains active and
+within its deadline. Reopening shows progress or **Capture ready. Choose Save or
+Copy.** A fresh click delivers the retained PNG without recapturing. One completed
+PNG stays in isolated document memory for two minutes, including time spent
+disconnected or transferring. Acknowledged delivery releases it; expiry requires
+a new capture. This recovery does not survive browser crashes or promise
+recovery after navigation/tab closure. See [architecture](architecture.md).
 
 ## Privacy boundary
 

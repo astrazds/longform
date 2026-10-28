@@ -1,6 +1,6 @@
 # Longform privacy policy
 
-Effective date: 2026-05-25
+Effective date: 2026-10-28
 
 Longform is a Chromium extension that captures the current web page as a full-page PNG when you choose to run it.
 
@@ -18,6 +18,20 @@ The generated PNG stays on your device. Longform only sends the image to a desti
 - **Copy** writes the PNG to your local clipboard when browser support allows it.
 
 After that, you control where the file or clipboard image goes.
+
+The content script retains at most one completed PNG per document in isolated
+memory for two minutes, so reopening the popup can recover a finished capture.
+The retention clock continues during reconnection and transfer. Acknowledged
+delivery releases the image; expiry clears it. No image history is written to
+extension storage. Navigation, tab/browser closure or a crash can lose the
+in-memory image.
+
+Image transfer uses bounded, acknowledged chunks inside extension contexts.
+Download links and screenshot URLs are created in the extension popup, outside
+the page DOM. Save starts the browser download flow; Longform does not verify
+that a file reached disk. Cancel is available until delivery commits. A lost
+delivery acknowledgement is reported as unknown and is never automatically
+repeated.
 
 ## Permissions
 

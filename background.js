@@ -1,26 +1,27 @@
-importScripts('protocol.js');
-const CAPTURE_MESSAGE_TYPE = Longform.protocol.viewportMessage;
+importScripts('protocol.js', 'capture-broker.js');
+const broker = Longform.broker.create({ tabs: chrome.tabs, runtimeId: chrome.runtime.id });
+
+chrome.tabs.onActivated.addListener(({ windowId, tabId }) => {
+  const notifications = broker.invalidate({ windowId, activeTabId: tabId });
+  for (const target of notifications) {
+    // IDs come exclusively from authenticated browser sender bindings.
+    void chrome.tabs.sendMessage(target.tabId, target.message,
+      { documentId: target.browserDocumentId, frameId: 0 }).catch(() => {});
+  }
+});
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === 'loading' || change.url) broker.invalidate({ tabId });
+});
+chrome.tabs.onRemoved.addListener((tabId) => broker.invalidate({ tabId }));
+chrome.tabs.onDetached.addListener((tabId) => broker.invalidate({ tabId }));
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request?.type !== CAPTURE_MESSAGE_TYPE) {
-    return false;
-  }
-
-  (async () => {
-    if (Number.isInteger(sender.tab?.id)) {
-      await chrome.tabs.update(sender.tab.id, { active: true });
-    }
-
-    const dataUrl = await chrome.tabs.captureVisibleTab(sender.tab?.windowId, {
-      format: 'png',
-    });
-    sendResponse({ success: true, data: dataUrl });
-  })().catch((error) => {
-    sendResponse({
-      success: false,
-      error: error.message || 'Failed to prepare the target tab for capture',
-    });
-  });
-
+  if (!Longform.protocol.brokerMessages.includes(request?.type)) return false;
+  Promise.resolve().then(() => request.type === 'BROKER_HELLO' ? (request.sessionId ? broker.register(request, sender) : broker.hello(sender))
+    : request.type === 'BROKER_RELEASE' ? broker.unregister(request, sender)
+    : request.type === 'CAPTURE_TILE' ? broker.capture(request, sender)
+      : broker.digestMessage(request, sender))
+    .then((reply) => sendResponse({ success: true, ...reply }))
+    .catch((error) => sendResponse({ success: false, errorCode: error.code || 'capture-failed' }));
   return true;
 });

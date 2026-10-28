@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Finite lazy content and resources</title>
+<style>
+  html, body { margin: 0; }
+  section { height: 700px; padding: 24px; box-sizing: border-box; background: #e3efff; }
+  section:nth-child(even) { background: #e2f3e7; }
+  img { width: 180px; height: 100px; }
+  .background { width: 180px; height: 100px; }
+</style>
+<section><h1>Finite lazy content</h1><p>Three sections; scrolling reveals image work and one finite append.</p></section>
+<section><h2>Lazy image and background</h2><img loading="lazy" alt="Loaded blue panel"><div class="background"></div></section>
+<section id="last"><h2>Last original section</h2></section>
+<script>
+  const picture = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="100"><rect width="180" height="100" fill="#1a73c7"/></svg>');
+  const watcher = new IntersectionObserver((entries) => {
+    for (const entry of entries) if (entry.isIntersecting) {
+      if (entry.target.tagName === 'IMG') entry.target.src = picture;
+      else entry.target.style.backgroundImage = `url("${picture}")`;
+      watcher.unobserve(entry.target);
+    }
+  });
+  document.querySelectorAll('img, .background').forEach((node) => watcher.observe(node));
+  let appended = false;
+  addEventListener('scroll', () => {
+    if (!appended && scrollY > 1000) {
+      appended = true;
+      const section = document.createElement('section');
+      section.innerHTML = '<h2>One finite appended section</h2>';
+      document.body.append(section);
+    }
+  });
+</script>

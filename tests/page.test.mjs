@@ -1,0 +1,644 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { loadRuntime, flush, fakeClock, deferred } from './helpers/runtime.mjs';
+
+// A CSSOM boundary double: production reads and writes real declaration values,
+// priorities, and presence. It does not replace any transaction behavior.
+class Style {
+  values = new Map();
+  fail = null;
+  get length() { return this.values.size; }
+  item(index) { return [...this.values.keys()][index] || ''; }
+  getPropertyValue(name) { return this.values.get(name)?.value || ''; }
+  getPropertyPriority(name) { return this.values.get(name)?.priority || ''; }
+  setProperty(name, value, priority = '') {
+    if (this.fail?.(name, value)) throw new Error('private page data');
+    this.values.set(name, { value, priority });
+  }
+  removeProperty(name) {
+    if (this.fail?.(name, '')) throw new Error('private page data');
+    this.values.delete(name);
+  }
+  get visibility() { return this.getPropertyValue('visibility'); }
+  get color() { return this.getPropertyValue('color'); }
+}
+
+async function setup({ suspendedPaint = false, elements = 2 } = {}) {
+  const root = { style: new Style(), scrollWidth: 1600, scrollHeight: 2000, clientWidth: 800, clientHeight: 600 };
+  const body = { style: new Style() };
+  const sticky = Array.from({ length: elements }, () => ({ style: new Style(), position: 'fixed' }));
+  const listeners = new Map();
+  const nodes = [];
+  const frames = [];
+  const scrolls = [];
+  let removes = 0;
+  const window = {
+    scrollX: 17.5, scrollY: 96.25, innerWidth: 800, innerHeight: 600, devicePixelRatio: 1.25,
+    getComputedStyle: (element) => ({ position: element.position || 'static' }),
+    addEventListener(name, callback) { listeners.set(name, callback); },
+    removeEventListener(name, callback) { if (listeners.get(name) === callback) listeners.delete(name); },
+    scrollTo(x, y) {
+      if (typeof x === 'object') ({ left: x, top: y } = x);
+      scrolls.push({ x, y, behavior: root.style.getPropertyValue('scroll-behavior'), snap: root.style.getPropertyValue('scroll-snap-type') });
+      window.scrollX = x;
+      window.scrollY = y;
+    },
+  };
+  const document = {
+    documentElement: root, body, scrollingElement: root,
+    head: { append(node) { node.isConnected = true; nodes.push(node); } },
+    querySelectorAll: () => [root, body, ...sticky],
+    createElement: () => ({ textContent: '', isConnected: false, sheet: { cssRules: [], media: { mediaText: '' } },
+      remove() { removes++; this.isConnected = false; nodes.splice(nodes.indexOf(this), 1); } }),
+  };
+  const controller = new AbortController();
+  const ctx = {
+    signal: controller.signal, attempt: 1,
+    checkpoint() { if (controller.signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' }); },
+  };
+  const { page } = await loadRuntime(['capture-geometry.js', 'capture-page.js'], {
+    window, document,
+    requestAnimationFrame(callback) {
+      if (suspendedPaint) frames.push(callback);
+      else queueMicrotask(callback);
+      return frames.length;
+    },
+  });
+  return { page, root, body, sticky, window, nodes, scrolls, ctx, controller,
+    pagehide: () => listeners.get('pagehide')?.(),
+    resumePaint() { for (const fn of frames.splice(0)) fn(); },
+    get removes() { return removes; },
+  };
+}
+
+async function layoutSetup() {
+  const clock = fakeClock();
+  const records = [];
+  let observer;
+  const rect = { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 };
+  const element = (extra = {}) => ({ style: new Style(), getBoundingClientRect: () => rect, ...extra });
+  const root = element({ scrollWidth: 800, scrollHeight: 600, clientWidth: 800, clientHeight: 600 });
+  const body = element();
+  const elements = [root, body];
+  const listeners = new Map();
+  const mutate = (record) => records.push(record);
+  for (const node of elements) {
+    const set = node.style.setProperty.bind(node.style);
+    node.style.setProperty = (...args) => {
+      set(...args);
+      mutate({ type: 'attributes', target: node, attributeName: 'style' });
+    };
+  }
+  const window = {
+    innerWidth: 800, innerHeight: 600, devicePixelRatio: 1.25, scrollX: 0, scrollY: 0,
+    getComputedStyle: (node) => ({ position: 'static', display: 'block', visibility: 'visible', ...node.computed }),
+    addEventListener() {}, removeEventListener() {},
+    scrollTo({ left, top }) { window.scrollX = left; window.scrollY = top; },
+  };
+  const document = {
+    documentElement: root, scrollingElement: root, body,
+    head: { append(node) { node.isConnected = true; mutate({ type: 'childList', target: this, addedNodes: [node], removedNodes: [] }); } },
+    querySelectorAll: () => elements,
+    createElement: () => ({ textContent: '', isConnected: false, remove() { this.isConnected = false; } }),
+    addEventListener(name, callback) { listeners.set(name, callback); },
+    removeEventListener(name) { listeners.delete(name); },
+  };
+  const controller = new AbortController();
+  const ctx = {
+    attempt: 1, signal: controller.signal,
+    checkpoint(attempt = this.attempt) {
+      if (controller.signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+      if (attempt !== this.attempt) throw Object.assign(new Error('stale'), { code: 'stale-attempt' });
+    },
+    external: (operation) => operation(),
+  };
+  const backgrounds = [];
+  const { page } = await loadRuntime(['capture-geometry.js', 'capture-page.js'], {
+    window, document, Date: { now: clock.now },
+    setTimeout(fn, delay) { return clock.schedule(fn, delay); }, clearTimeout(cancel) { cancel?.(); },
+    requestAnimationFrame(fn) { queueMicrotask(fn); },
+    MutationObserver: class {
+      constructor(fn) { this.callback = fn; observer = this; }
+      observe() {} takeRecords() { return records.splice(0); }
+      disconnect() { this.disconnected = true; }
+    },
+    Image: class {
+      complete = false; naturalWidth = 0;
+      constructor() { backgrounds.push(this); }
+    },
+  });
+  const tx = page.beginTransaction(ctx);
+  return { page, tx, ctx, clock, root, body, elements, window, backgrounds, mutate, element, controller,
+    get observer() { return observer; }, listeners };
+}
+
+test('clipped descendant does not enlarge root', async () => {
+  const env = await layoutSetup();
+  env.elements.push(env.element({ getBoundingClientRect: () => ({ left: 0, top: 0, right: 800, bottom: 5000, width: 800, height: 5000 }) }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  assert.equal(observer.measure().pageHeight, 600);
+  assert.equal((await env.page.measure()).pageHeight, 600);
+  observer.dispose();
+});
+
+test('settles after two samples', async () => {
+  const env = await layoutSetup();
+  assert.equal(env.page.sampleDelayMs, 150);
+  assert.equal(env.page.stableSamplesRequired, 2);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  let result;
+  const pending = observer.settleVisible().then((sample) => { result = sample; });
+  await env.clock.advance(149);
+  assert.equal(result, undefined);
+  await env.clock.advance(1);
+  await pending;
+  assert.equal(result.visibleResourcesReady, true);
+  assert.equal(result.pixelRatio, 1.25);
+  observer.dispose();
+});
+
+test('visible image timeout is not success', async () => {
+  const env = await layoutSetup();
+  env.elements.push(env.element({ tagName: 'IMG', src: 'pending.png', complete: false, naturalWidth: 0 }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const result = assert.rejects(observer.settleVisible(), { code: 'resource-timeout' });
+  await env.clock.advance(10000);
+  await result;
+  observer.dispose();
+});
+
+test('page mutations invalidate generation', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  env.mutate({ type: 'characterData', target: { parentElement: env.body } });
+  assert.ok(observer.sample().generation > before.generation);
+  const generation = observer.sample().generation;
+  env.root.scrollWidth = 1400;
+  env.root.clientWidth = 785;
+  env.window.innerWidth = 785;
+  const changed = observer.sample();
+  assert.equal(changed.pageWidth, 1400);
+  assert.equal(changed.viewportWidth, 785);
+  assert.ok(changed.generation > generation);
+  observer.dispose();
+});
+
+test('extension mutations do not invalidate generation', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  await env.tx.prepare();
+  await env.tx.scrollTo(10.5, 20.25);
+  const after = observer.sample();
+  assert.equal(after.generation, before.generation);
+  assert.equal(after.scrollX, 10.5);
+  assert.equal(after.scrollY, 20.25);
+  observer.dispose();
+  assert.equal(env.observer.disconnected, true);
+});
+
+test('same-size page text adjacent to an owned write is retained', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  env.mutate({ type: 'characterData', target: env.body });
+  const write = env.root.style.setProperty.bind(env.root.style);
+  env.root.style.setProperty = (...args) => {
+    write(...args);
+    env.mutate({ type: 'characterData', target: env.body });
+  };
+  await env.tx.prepare();
+  assert.ok(observer.sample().generation >= before.generation + 2);
+  observer.dispose();
+});
+
+test('a synchronous site style edit on the owned target is retained', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  const write = env.root.style.setProperty.bind(env.root.style);
+  env.root.style.setProperty = (...args) => {
+    write(...args);
+    write('color', 'red');
+  };
+  await env.tx.prepare();
+  assert.ok(observer.sample().generation > before.generation);
+  observer.dispose();
+});
+
+test('clipped images and unrelated network traffic do not block settling', async () => {
+  const env = await layoutSetup();
+  const parent = env.element({ computed: { overflow: 'hidden' },
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) });
+  env.elements.push(env.element({ tagName: 'IMG', complete: false, parentElement: parent,
+    getBoundingClientRect: () => ({ left: 0, top: 200, right: 100, bottom: 300, width: 100, height: 100 }) }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const pending = observer.settleVisible();
+  env.listeners.get('load')({ target: { tagName: 'SCRIPT' } });
+  await env.clock.advance(150);
+  assert.equal((await pending).visibleResourcesReady, true);
+  observer.dispose();
+});
+
+test('repeated offscreen and clipped image events do not invalidate visible settling', async () => {
+  const env = await layoutSetup();
+  const parent = env.element({ computed: { overflow: 'hidden' },
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) });
+  const image = env.element({ tagName: 'IMG', complete: false,
+    getBoundingClientRect: () => ({ left: 0, top: 700, right: 100, bottom: 800, width: 100, height: 100 }) });
+  const clipped = env.element({ tagName: 'IMG', complete: false, parentElement: parent,
+    getBoundingClientRect: () => ({ left: 0, top: 200, right: 100, bottom: 300, width: 100, height: 100 }) });
+  env.elements.push(image, clipped);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  let settled;
+  const pending = observer.settleVisible().then((sample) => { settled = sample; });
+  pending.catch(() => {});
+  for (const ms of [50, 100, 150]) env.clock.schedule(() => {
+    env.listeners.get('load')({ target: image });
+    env.listeners.get('error')({ target: clipped });
+  }, ms);
+  try {
+    await env.clock.advance(150);
+    assert.equal(observer.sample().generation, before.generation);
+    assert.equal(settled?.visibleResourcesReady, true);
+    await pending;
+    image.getBoundingClientRect = env.body.getBoundingClientRect;
+    image.complete = true;
+    image.naturalWidth = 10;
+    env.listeners.get('load')({ target: image });
+    assert.ok(observer.sample().generation > before.generation);
+  } finally { observer.dispose(); }
+});
+
+test('unreadable resources fail with a safe specific code', async () => {
+  const env = await layoutSetup();
+  env.body.getBoundingClientRect = () => { throw new Error('private URL'); };
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  await assert.rejects(observer.settleVisible(), { code: 'resource-unreadable', message: 'resource-unreadable' });
+  observer.dispose();
+});
+
+test('cancelled decode continuations do not start resource work', async () => {
+  const env = await layoutSetup();
+  let decodes = 0;
+  env.elements.push(env.element({ tagName: 'IMG', src: 'ready.png', complete: true, naturalWidth: 10,
+    decode() { decodes++; return Promise.resolve(); } }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  observer.sample();
+  env.controller.abort();
+  await flush();
+  assert.equal(decodes, 0);
+  observer.dispose();
+});
+
+test('continuous same-size text mutations hit the layout bound', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  let active = true;
+  const change = () => {
+    if (!active) return;
+    env.mutate({ type: 'characterData', target: env.body });
+    env.clock.schedule(change, 50);
+  };
+  env.clock.schedule(change, 50);
+  const result = assert.rejects(observer.settleVisible(), { code: 'layout-unstable' });
+  await env.clock.advance(10000);
+  await result;
+  active = false;
+  observer.dispose();
+});
+
+test('broken images and failed decode are resource failures', async () => {
+  for (const image of [
+    { complete: true, naturalWidth: 0 },
+    { complete: true, naturalWidth: 20, decode: () => Promise.reject(new Error('private URL')) },
+  ]) {
+    const env = await layoutSetup();
+    env.elements.push(env.element({ tagName: 'IMG', src: 'broken.png', ...image }));
+    const observer = env.page.observeLayout(env.tx, env.ctx);
+    const result = assert.rejects(observer.settleVisible(), { code: 'resource-failed' });
+    await env.clock.advance(300);
+    await result;
+    observer.dispose();
+  }
+});
+
+test('a same URL image reload rechecks readiness and decodes the new request', async () => {
+  const env = await layoutSetup();
+  let decodes = 0;
+  const image = env.element({ tagName: 'IMG', src: 'same.png', complete: true, naturalWidth: 20,
+    decode() { decodes++; return Promise.resolve(); } });
+  env.elements.push(image);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  try {
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, true);
+    image.complete = false;
+    image.naturalWidth = 0;
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    let settled = false;
+    const pending = observer.settleVisible().then(() => { settled = true; });
+    pending.catch(() => {});
+    await env.clock.advance(300);
+    assert.equal(settled, false);
+    image.complete = true;
+    image.naturalWidth = 20;
+    await env.clock.advance(450);
+    await pending;
+    assert.equal(decodes, 2);
+    image.naturalWidth = 0;
+    assert.throws(() => observer.sample(), { code: 'resource-failed' });
+  } finally { observer.dispose(); }
+});
+
+test('an old decode cannot complete a later request for the same image URL', async () => {
+  const env = await layoutSetup();
+  const decodes = [];
+  const image = env.element({ tagName: 'IMG', src: 'same.png', complete: true, naturalWidth: 20,
+    decode() { const pending = deferred(); decodes.push(pending); return pending.promise; } });
+  env.elements.push(image);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  try {
+    observer.sample();
+    await flush();
+    image.complete = false;
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    image.complete = true;
+    observer.sample();
+    await flush();
+    assert.equal(decodes.length, 2);
+    decodes[0].resolve();
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    decodes[1].resolve();
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, true);
+  } finally { observer.dispose(); }
+});
+
+test('image completion events invalidate the cached decode for an unchanged URL', async () => {
+  const env = await layoutSetup();
+  let decodes = 0;
+  const image = env.element({ tagName: 'IMG', src: 'same.png', complete: true, naturalWidth: 20,
+    decode() { decodes++; return Promise.resolve(); } });
+  env.elements.push(image);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  try {
+    observer.sample();
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, true);
+    env.listeners.get('load')({ target: image });
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, true);
+    assert.equal(decodes, 2);
+  } finally { observer.dispose(); }
+});
+
+test('computed backgrounds settle while offscreen images do not block', async () => {
+  const env = await layoutSetup();
+  env.body.computed = { backgroundImage: 'url("background.png")' };
+  env.elements.push(env.element({ tagName: 'IMG', complete: false,
+    getBoundingClientRect: () => ({ left: 0, top: 700, right: 100, bottom: 800, width: 100, height: 100 }) }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  let settled = false;
+  const pending = observer.settleVisible().then(() => { settled = true; });
+  await env.clock.advance(150);
+  assert.equal(settled, false);
+  assert.equal(env.backgrounds.length, 1);
+  env.backgrounds[0].complete = true;
+  env.backgrounds[0].naturalWidth = 200;
+  await env.clock.advance(300);
+  await pending;
+  assert.equal(settled, true);
+  observer.dispose();
+});
+
+test('retry preserves newer declarations but refuses broken suppression and fences old scroll continuations', async () => {
+  const env = await setup({ suspendedPaint: true });
+  env.ctx.checkpoint = (attempt = env.ctx.attempt) => {
+    if (attempt !== env.ctx.attempt) throw Object.assign(new Error('stale'), { code: 'stale-attempt' });
+  };
+  const tx = env.page.beginTransaction(env.ctx);
+  const first = tx.prepare();
+  env.resumePaint(); await flush(); env.resumePaint(); await first;
+  const oldScroll = tx.scrollTo(100, 200);
+  const rejected = assert.rejects(oldScroll, { code: 'stale-attempt' });
+  env.sticky[0].style.setProperty('visibility', 'visible', 'important');
+  const lateFixed = { style: new Style(), position: 'fixed' };
+  env.sticky.push(lateFixed);
+  env.ctx.attempt = 2;
+  await assert.rejects(tx.prepare(), { code: 'preparation-changed' });
+  env.resumePaint(); await flush(); env.resumePaint();
+  await rejected;
+  assert.equal(env.nodes.length, 1);
+  assert.equal(env.sticky[0].style.visibility, 'visible');
+  assert.equal((await tx.restore()).ok, true);
+  assert.equal(lateFixed.style.visibility, '');
+  assert.equal(env.sticky[0].style.visibility, 'visible');
+  assert.deepEqual([env.window.scrollX, env.window.scrollY], [17.5, 96.25]);
+});
+
+// Accepting a nonthrowing scroll without observing it used to release a PNG.
+test('ineffective restoration reports failure and still restores all policies', async () => {
+  const env = await setup();
+  env.root.style.setProperty('scroll-behavior', 'smooth');
+  const tx = env.page.beginTransaction(env.ctx);
+  await tx.prepare(); await tx.scrollTo(500, 700);
+  env.sticky[1].style.fail = (name, value) => name === 'visibility' && value === '';
+  env.window.scrollTo = () => {};
+  const result = tx.restoreSync();
+  assert.equal(result.ok, false);
+  assert.deepEqual([...result.failures], ['visibility', 'scroll-position']);
+  assert.equal(env.root.style.getPropertyValue('scroll-behavior'), 'smooth');
+  assert.equal(env.sticky[0].style.visibility, '');
+  assert.equal(env.nodes.length, 0);
+});
+
+test('restoration permits genuine live shrink and device pixel rounding before releasing policies', async () => {
+  for (const shrink of [false, true]) {
+    const env = await setup();
+    const tx = env.page.beginTransaction(env.ctx);
+    await tx.prepare(); await tx.scrollTo(500, 700);
+    if (shrink) env.root.scrollHeight = 650; // live max Y is 50, originally 1400
+    env.window.scrollTo = ({ left, top }) => {
+      assert.equal(env.root.style.getPropertyValue('scroll-snap-type'), 'none');
+      env.window.scrollX = Math.round(left * 1.25) / 1.25;
+      env.window.scrollY = shrink ? 50 : Math.round(top * 1.25) / 1.25;
+    };
+    const x = Object.getOwnPropertyDescriptor(env.window, 'scrollX');
+    let readWhileSuppressed = false;
+    Object.defineProperty(env.window, 'scrollX', { configurable: true,
+      get() { readWhileSuppressed = env.root.style.getPropertyValue('scroll-snap-type') === 'none'; return x.value; },
+      set(value) { x.value = value; } });
+    assert.equal(tx.restoreSync().ok, true);
+    assert.equal(readWhileSuppressed, true, 'verification occurs before policies are restored');
+    assert.equal(env.root.style.length, 0);
+  }
+});
+
+test('preparation stylesheet integrity is checked during retry and observer validation', async () => {
+  for (const change of ['remove', 'text', 'disabled', 'rules', 'media']) {
+    const env = await setup();
+    const tx = env.page.beginTransaction(env.ctx);
+    await tx.prepare();
+    if (change === 'remove') env.nodes[0].isConnected = false;
+    if (change === 'text') env.nodes[0].textContent += 'body { color: red; }';
+    if (change === 'disabled') env.nodes[0].disabled = true;
+    // CSSOM edits need not modify textContent or fire MutationObserver.
+    if (change === 'rules') env.nodes[0].sheet = { cssRules: [{ cssText: 'body {}' }] };
+    if (change === 'media') env.nodes[0].sheet.media.mediaText = 'print';
+    await assert.rejects(tx.prepare(), { code: 'preparation-changed' });
+    await tx.restore();
+    assert.equal(env.root.style.length, 0);
+  }
+  const env = await layoutSetup();
+  await env.tx.prepare();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  env.root.style.setProperty('scroll-snap-type', 'y mandatory', 'important');
+  assert.throws(() => observer.sample(), { code: 'preparation-changed' });
+  observer.dispose(); await env.tx.restore();
+  assert.equal(env.root.style.getPropertyValue('scroll-snap-type'), 'y mandatory');
+});
+
+test('partial preparation unwinds', async () => {
+  const env = await setup();
+  env.sticky[1].style.fail = (name) => name === 'visibility';
+  assert.equal(typeof env.page.beginTransaction, 'function');
+  const tx = env.page.beginTransaction(env.ctx);
+  await assert.rejects(tx.prepare());
+  env.controller.abort(); // cleanup must not call the cancelled checkpoint.
+  const result = await tx.restore();
+  assert.equal(result.ok, true);
+  assert.equal(env.sticky[0].style.visibility, '');
+  assert.equal(env.root.style.length, 0);
+  assert.equal(env.nodes.length, 0);
+  assert.deepEqual([env.window.scrollX, env.window.scrollY], [17.5, 96.25]);
+});
+
+test('a successful mutation is journaled before CSSOM verification can throw', async () => {
+  const env = await setup();
+  const style = env.sticky[0].style;
+  let reads = 0;
+  const originalRead = style.getPropertyPriority.bind(style);
+  style.getPropertyPriority = (name) => {
+    if (name === 'visibility' && ++reads === 2) throw new Error('page detail');
+    return originalRead(name);
+  };
+  const tx = env.page.beginTransaction(env.ctx);
+  await assert.rejects(tx.prepare());
+  assert.equal((await tx.restore()).ok, true);
+  assert.equal(style.visibility, '');
+});
+
+test('priorities and newer page edits survive', async () => {
+  const env = await setup({ elements: 3 });
+  const [old, changed, priorityChanged] = env.sticky;
+  old.style.setProperty('visibility', 'collapse', 'important');
+  const tx = env.page.beginTransaction(env.ctx);
+  await tx.prepare();
+  assert.equal(old.style.getPropertyPriority('visibility'), 'important');
+  old.style.setProperty('color', 'blue');
+  changed.style.setProperty('visibility', 'visible', 'important');
+  priorityChanged.style.setProperty('visibility', 'hidden');
+  const result = await tx.restore();
+  assert.equal(old.style.visibility, 'collapse');
+  assert.equal(old.style.getPropertyPriority('visibility'), 'important');
+  assert.equal(old.style.color, 'blue');
+  assert.equal(changed.style.visibility, 'visible');
+  assert.equal(changed.style.getPropertyPriority('visibility'), 'important');
+  assert.equal(priorityChanged.style.visibility, 'hidden');
+  assert.equal(priorityChanged.style.getPropertyPriority('visibility'), '');
+  assert.deepEqual([...result.conflicts], ['visibility']);
+  assert.equal(result.ok, true);
+});
+
+test('transaction retains the original fractional position', async () => {
+  const env = await setup();
+  env.window.scrollX = 7.5; env.window.scrollY = 80.25;
+  const transaction = env.page.beginTransaction(env.ctx);
+  await transaction.prepare();
+  await transaction.scrollTo(400, 700);
+  await transaction.restore();
+  assert.deepEqual([env.window.scrollX, env.window.scrollY], [7.5, 80.25]);
+});
+
+test('restore scroll before smooth policy', async () => {
+  const env = await setup();
+  env.root.style.setProperty('scroll-behavior', 'smooth', 'important');
+  env.root.style.setProperty('scroll-snap-type', 'y mandatory', 'important');
+  const tx = env.page.beginTransaction(env.ctx);
+  await tx.prepare();
+  await tx.scrollTo(500.5, 800.25);
+  const result = await tx.restore();
+  assert.equal(result.ok, true);
+  assert.deepEqual(env.scrolls.at(-1), { x: 17.5, y: 96.25, behavior: 'auto', snap: 'none' });
+  assert.equal(env.root.style.getPropertyValue('scroll-behavior'), 'smooth');
+  assert.equal(env.root.style.getPropertyPriority('scroll-behavior'), 'important');
+  assert.equal(env.root.style.getPropertyValue('scroll-snap-type'), 'y mandatory');
+});
+
+test('cleanup continues after one failure', async () => {
+  const env = await setup();
+  const tx = env.page.beginTransaction(env.ctx);
+  await tx.prepare();
+  env.sticky[1].style.fail = (name, value) => name === 'visibility' && value === '';
+  const result = await tx.restore();
+  assert.equal(result.ok, false);
+  assert.deepEqual([...result.failures], ['visibility']);
+  assert.equal(env.sticky[0].style.visibility, '');
+  assert.equal(env.root.style.length, 0);
+  assert.equal(env.nodes.length, 0);
+  assert.equal(JSON.stringify(result).includes('private page data'), false);
+  assert.equal(tx.restoreSync(), result);
+  assert.equal(await tx.restore(), result);
+  assert.equal(env.removes, 1);
+  assert.equal(env.scrolls.length, 1);
+});
+
+test('pagehide fences resumed callbacks', async () => {
+  const env = await setup({ suspendedPaint: true });
+  const tx = env.page.beginTransaction(env.ctx);
+  const preparing = tx.prepare();
+  const preparationRejected = assert.rejects(preparing, { code: 'page-restored' });
+  env.pagehide();
+  assert.equal(env.nodes.length, 0);
+  assert.equal(env.root.style.length, 0);
+  env.resumePaint();
+  await preparationRejected;
+  await assert.rejects(tx.scrollTo(99, 999), { code: 'page-restored' });
+  await flush();
+  assert.equal(env.scrolls.length, 1); // only the synchronous restoration
+  assert.equal(env.removes, 1);
+});
+
+test('paint waits are bounded when animation frames stop', async () => {
+  const env = await setup({ suspendedPaint: true });
+  const tx = env.page.beginTransaction(env.ctx);
+  await tx.prepare();
+  await tx.scrollTo(20, 30);
+  assert.equal((await tx.restore()).ok, true);
+});
+
+for (const fails of [false, true]) {
+  test(`transaction restores after ${fails ? 'failed' : 'successful'} capture`, async () => {
+    const env = await setup();
+    const capture = (async () => {
+      const transaction = env.page.beginTransaction(env.ctx);
+      try {
+        await transaction.prepare(); await transaction.scrollTo(400, 700);
+        if (fails) throw new Error('capture failed');
+        return 'image';
+      } finally { await transaction.restore(); }
+    })();
+    if (fails) await assert.rejects(capture, /capture failed/);
+    else assert.equal(await capture, 'image');
+    assert.deepEqual([env.window.scrollX, env.window.scrollY], [17.5, 96.25]);
+    assert.equal(env.root.style.length, 0);
+    assert.equal(env.sticky[0].style.visibility, '');
+    assert.equal(env.nodes.length, 0);
+  });
+}

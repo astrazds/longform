@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" style="scroll-behavior: smooth !important; scroll-snap-type: y mandatory !important">
+<meta charset="utf-8">
+<title>Restoration conflicts</title>
+<style>
+  body { margin: 0; min-width: 1800px; }
+  section { height: 900px; scroll-snap-align: start; background: #d6e9fc; }
+  section:nth-of-type(even) { background: #c8f4d7; }
+  aside { position: fixed; top: 15px; left: 15px; background: #fff; padding: 20px; }
+</style>
+<aside id="original" style="visibility: visible !important">Original priority</aside>
+<aside id="changed" style="top: 90px">Page-owned edit</aside>
+<section>First section</section><section>Second section</section><section>Third section</section>
+<script>
+  window.applyPageEdits = () => {
+    document.querySelector('#original').style.color = 'blue';
+    document.querySelector('#changed').style.setProperty('visibility', 'visible', 'important');
+  };
+</script>
+</html>

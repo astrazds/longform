@@ -198,11 +198,36 @@
     return { phrase: 'copied' };
   }
 
+  /** Callback resolves a validated Blob only after delivery commit succeeds. */
+  async function copyBlobDuringGesture(getCommittedBlob) {
+    if (globalThis.location?.protocol !== 'chrome-extension:') throw new Error('clipboard write runs in the popup');
+    if (!canCopyArtifact()) return { phrase: 'copy-unavailable', deliveryOutcome: 'failed' };
+    let captureError;
+    const blobPromise = Promise.resolve().then(getCommittedBlob).then((blob) => {
+      if (!(blob instanceof Blob) || blob.type !== 'image/png' || !blob.size) {
+        throw Object.assign(new Error('Invalid PNG'), { code: 'copy-invalid' });
+      }
+      return blob;
+    }).catch((error) => { captureError = error; throw error; });
+    // Attach a rejection handler even if ClipboardItem throws synchronously.
+    blobPromise.catch(() => {});
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blobPromise })]);
+      await blobPromise;
+      return { phrase: 'copied', deliveryOutcome: 'success' };
+    } catch (writeError) {
+      try { await blobPromise; } catch (error) { captureError = error; }
+      return { phrase: phraseForFailure(captureError, writeError),
+        deliveryOutcome: captureError?.code === 'delivery-unknown' ? 'unknown' : 'failed' };
+    }
+  }
+
   Longform.clipboard = Object.freeze({
     canCopyArtifact,
     phrases,
     pngBase64ToBlob,
     pngBlobToBase64,
     copyDuringGesture,
+    copyBlobDuringGesture,
   });
 })();

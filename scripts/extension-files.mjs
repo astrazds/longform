@@ -11,6 +11,8 @@ export const extensionFiles = [
   ...contentFiles,
   'capture-session.js',
   'capture-broker.js',
+  'capture-transfer.js',
+  'capture-delivery.js',
   'background.js',
   'manifest.json',
   'popup.css',

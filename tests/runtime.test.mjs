@@ -120,6 +120,52 @@ test('an early clipboard rejection waits for capture and keeps a capture code', 
   assert.equal(`${(await pending).phrase}`, 'page-too-large');
 });
 
+test('clipboard write starts in original gesture', async () => {
+  let called = false;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { clipboard } = await loadRuntime(['clipboard.js'], {
+    location: { protocol: 'chrome-extension:' },
+    navigator: { clipboard: { write: () => { called = true; return Promise.resolve(); } } },
+    ClipboardItem: class { constructor(data) { this.data = data; } },
+  });
+  assert.equal(typeof clipboard.copyBlobDuringGesture, 'function', 'committed blob clipboard API exists');
+  const result = clipboard.copyBlobDuringGesture(() => gate);
+  assert.equal(called, true, 'clipboardWriteCalledBeforeFirstAwait');
+  release(new Blob(['png'], { type: 'image/png' }));
+  assert.deepEqual({ ...await result }, { phrase: 'copied', deliveryOutcome: 'success' });
+});
+
+test('blob clipboard early rejection waits for commit callback cleanup', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { clipboard } = await loadRuntime(['clipboard.js'], {
+    location: { protocol: 'chrome-extension:' },
+    navigator: { clipboard: { write: () => Promise.reject(new Error('permission denied')) } },
+    ClipboardItem: class { constructor(data) { this.data = data; } },
+  });
+  assert.equal(typeof clipboard.copyBlobDuringGesture, 'function', 'committed blob clipboard API exists');
+  let settled = false;
+  const pending = clipboard.copyBlobDuringGesture(() => gate.then(() => { throw Object.assign(new Error('cancelled'), { code: 'cancelled' }); }));
+  pending.then(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  release();
+  assert.deepEqual({ ...await pending }, { phrase: 'copy-failed', deliveryOutcome: 'failed' });
+});
+
+test('blob clipboard preserves unknown commit outcome', async () => {
+  const { clipboard } = await loadRuntime(['clipboard.js'], {
+    location: { protocol: 'chrome-extension:' },
+    navigator: { clipboard: { write: (items) => items[0].data['image/png'] } },
+    ClipboardItem: class { constructor(data) { this.data = data; } },
+  });
+  const result = await clipboard.copyBlobDuringGesture(() => {
+    throw Object.assign(new Error('disconnected'), { code: 'delivery-unknown' });
+  });
+  assert.equal(result.deliveryOutcome, 'unknown');
+});
+
 test('upgrading and reinjecting the content entry uses the current capture exactly once', async () => {
   const listeners = new Set([
     (request, sender, reply) => {

@@ -218,8 +218,9 @@
         // terminal callbacks stay fenced; neither retention nor work is renewed.
         if (current?.blob && state.phase === 'failed' && current.expiresAt > now()) {
           const previous = current;
+          const id = identity();
           previous.stopRetention?.();
-          const session = { id: identity(), generation: ++generation, attempt: previous.attempt,
+          const session = { id, generation: ++generation, attempt: previous.attempt,
             controller: new AbortController(), running: false, terminal: false,
             remaining: previous.remaining, activeSince: null, blob: previous.blob,
             expiresAt: previous.expiresAt, transferId: null, committed: false,

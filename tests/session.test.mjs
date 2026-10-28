@@ -56,6 +56,34 @@ test('session creation fails closed if cryptographic randomness becomes unavaila
   owner.dispose();
 });
 
+test('recovery crypto failure preserves scheduled artifact expiry without further API calls', async (t) => {
+  const rngError = new Error('random source failed');
+  for (const [name, crypto, expected] of [
+    ['missing crypto', {}, { code: 'crypto-unavailable' }],
+    ['throwing RNG', { getRandomValues() { throw rngError; } }, rngError],
+  ]) {
+    await t.test(name, async () => {
+      const context = await loadContext(['capture-session.js']);
+      const clock = fakeClock();
+      let fired = 0;
+      const owner = context.Longform.sessions.install({ run: async () => png(), now: clock.now,
+        schedule: (fn, ms) => clock.schedule(() => { fired++; fn(); }, ms) });
+      const first = owner.start({ destination: 'download' }); await flush();
+      owner.beginTransfer(first.sessionId, 'first');
+      owner.commitDelivery(first.sessionId, 'first');
+      owner.finishDelivery(first.sessionId, 'first', 'failed');
+      context.crypto = crypto;
+      assert.throws(() => owner.start({ destination: 'download' }), expected);
+      await clock.advance(119999);
+      assert.equal(fired, 0);
+      await clock.advance(1);
+      assert.equal(fired, 1, 'original artifact expiry must execute without a later owner API call');
+      assert.throws(() => owner.artifact(first.sessionId), { code: 'artifact-unavailable' });
+      owner.dispose();
+    });
+  }
+});
+
 test('explicit recovery creates a delivery-only session with original TTL and stale callbacks fenced', async () => {
   let calls = 0;
   const { owner, clock } = await setup(async () => { calls++; return png(); });

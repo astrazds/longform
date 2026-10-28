@@ -39,7 +39,7 @@ function context(overrides = {}) {
     ...overrides };
   return { ctx, controller };
 }
-async function setup({ change, decode = async () => ({ width: 1, height: 1, close() {} }), sourceProtocol = 'http:' } = {}) {
+async function setup({ change, afterBrokerResponse, decode = async () => ({ width: 1, height: 1, close() {} }), sourceProtocol = 'http:' } = {}) {
   const worker = await loadContext(['capture-broker.js'], { crypto: webcrypto });
   const broker = worker.Longform.broker.create({ runtimeId: 'extension', tabs: {} });
   const sender = { id: 'extension', frameId: 0, documentId: 'browser-doc', tab: { id: 1, windowId: 2 }, url: `${sourceProtocol}//example.test/` };
@@ -47,8 +47,12 @@ async function setup({ change, decode = async () => ({ width: 1, height: 1, clos
   const source = await loadRuntime(files, { location: { protocol: sourceProtocol }, crypto: undefined,
     chrome: { runtime: { sendMessage: async (message) => {
       requests.push(message);
-      try { return { success: true, ...(message.type === 'BROKER_HELLO'
-        ? broker.hello(sender) : await broker.digestMessage(message, sender)) }; }
+      try {
+        const reply = { success: true, ...(message.type === 'BROKER_HELLO'
+          ? broker.hello(sender) : await broker.digestMessage(message, sender)) };
+        afterBrokerResponse?.(message, reply);
+        return reply;
+      }
       catch (error) { return { success: false, errorCode: error.code }; }
     } } } });
   const target = await loadRuntime(files, { location: { protocol: 'chrome-extension:' }, crypto: webcrypto, createImageBitmap: decode });
@@ -131,6 +135,24 @@ test('disconnect requires explicit delivery retry', async () => {
   const results = await Promise.allSettled([received, sent]);
   assert.ok(results.every((r) => r.status === 'rejected' && r.reason.code === 'transfer-failed'));
   const count = sends; await flush(); assert.equal(sends - count, 0, 'automaticRetryCount');
+});
+
+test('explicit fresh transfer retries immediately after disconnect during source hashing', async () => {
+  let s; let disconnected = false;
+  s = await setup({ afterBrokerResponse(message, reply) {
+    if (message.type === 'DIGEST_BEGIN' && reply.success && !disconnected) {
+      disconnected = true; s.disconnect();
+    }
+  } });
+  const original = new Blob([png], { type: 'image/png' });
+  await assert.rejects(s.source.transfer.send(original, { port: s.left, ctx: context().ctx, transferId: 'old-transfer' }),
+    (error) => error.code === 'transfer-failed');
+  const retry = ports();
+  const received = s.target.transfer.receive({ port: retry.right, ctx: context().ctx, transferId: 'fresh-transfer', maxBytes: 1000 });
+  const sent = s.source.transfer.send(original, { port: retry.left, ctx: context().ctx, transferId: 'fresh-transfer' });
+  const [, blob] = await Promise.all([sent, received]);
+  assert.deepEqual(Buffer.from(await blob.arrayBuffer()), png);
+  assert.equal(s.requests.filter((m) => m.type === 'DIGEST_BEGIN').length, 2, 'only the explicit retry starts a new digest');
 });
 test('expired transfer never commits', async () => {
   const gate = deferred(); const decoding = deferred(); const target = context(); let closed = 0;

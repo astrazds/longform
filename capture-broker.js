@@ -88,7 +88,7 @@
       let session = record.sessions.get(request.sessionId);
       if (!session) {
         // Keep lightweight replay metadata for this browser document's lifetime.
-        session = { nextTile: 0, busy: false };
+        session = { nextTile: 0, busy: false, digestTransfers: new Set() };
         record.sessions.set(request.sessionId, session);
       }
       return { record, session, epoch: record.epoch };
@@ -142,15 +142,23 @@
       const bound = scope(request, sender);
       if (!['DIGEST_BEGIN', 'DIGEST_CHUNK', 'DIGEST_END'].includes(request.type)
           || !token(request.transferId) || !Number.isSafeInteger(request.chunkIndex) || request.chunkIndex < 0) throw fail('invalid-request');
-      let entry = [...digests].find((item) => item.record === bound.record && item.sessionId === request.sessionId);
+      let entry = [...digests].find((item) => item.record === bound.record
+        && item.sessionId === request.sessionId && item.transferId === request.transferId);
       if (request.type === 'DIGEST_BEGIN') {
-        if (entry || request.chunkIndex !== 0) throw fail('invalid-request');
+        if (bound.session.digestTransfers.has(request.transferId) || request.chunkIndex !== 0) throw fail('invalid-request');
         if (!Number.isSafeInteger(request.byteLength) || request.byteLength <= 0 || request.byteLength > limits.artifactBytes) throw fail('memory-limit');
+        // A fresh explicitly requested transfer supersedes abandoned work only
+        // within this authenticated document/session. Native hashing cannot be
+        // cancelled: invalidate it but retain its reservation until settlement.
+        for (const previous of digests) {
+          if (previous.record === bound.record && previous.sessionId === request.sessionId && !previous.invalid) expire(previous);
+        }
         const reservation = 8 * request.byteLength + limits.digestOverheadBytes;
         if (reserved + reservation > limits.workingMemoryBytes) throw fail('memory-limit');
         entry = { ...bound, sessionId: request.sessionId, transferId: request.transferId,
           buffer: new Uint8Array(request.byteLength), reservation, offset: 0, nextChunk: 0, phase: 'receiving' };
         reserved += reservation;
+        bound.session.digestTransfers.add(request.transferId);
         digests.add(entry);
         touch(entry);
         return { generation, transferId: request.transferId, chunkIndex: 0 };

@@ -117,6 +117,65 @@ test('aggregate digest memory ceiling rejects reservations and expiry frees capa
   await f.broker.digestMessage(digest(f, 'DIGEST_BEGIN', { byteLength: 33554432,
     sessionId: 'second' }), sender());
 });
+
+test('fresh authenticated digest supersedes abandoned receiving transfer and fences stale identities', async () => {
+  const f = await setup();
+  const old = digest(f, 'DIGEST_BEGIN', { byteLength: 33554432 });
+  await f.broker.digestMessage(old, sender());
+  // Forged session/document/generation/sender cannot free the original reservation.
+  for (const patch of [{ sessionId: 'forged' }, { documentId: 'forged' }, { generation: 'stale' }]) {
+    await assert.rejects(f.broker.digestMessage({ ...old, ...patch, transferId: 'new' }, sender()));
+  }
+  await assert.rejects(f.broker.digestMessage({ ...old, transferId: 'new' }, { ...sender(), frameId: 1 }), code('invalid-sender'));
+  await assert.rejects(f.broker.digestMessage(digest(f, 'DIGEST_BEGIN', { sessionId: 'other-session', byteLength: 33554432 }), sender()), code('memory-limit'));
+  const next = { ...old, transferId: 'fresh', byteLength: 3 };
+  await f.broker.digestMessage(next, sender());
+  await assert.rejects(f.broker.digestMessage(old, sender()), code('invalid-request'));
+  await assert.rejects(f.broker.digestMessage(digest(f, 'DIGEST_CHUNK', { data: 'YWJj' }), sender()), code('invalid-request'));
+  await f.broker.digestMessage({ ...next, type: 'DIGEST_CHUNK', data: 'YWJj' }, sender());
+  const result = await f.broker.digestMessage({ ...next, type: 'DIGEST_END', chunkIndex: 1 }, sender());
+  assert.equal(result.digest, 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  await assert.rejects(f.broker.digestMessage(next, sender()), code('invalid-request'));
+});
+
+test('superseded native hash retains its reservation until native settlement without shadowing fresh digest', async () => {
+  const pending = deferred(); let calls = 0;
+  const f = await setup(undefined, { crypto: { randomUUID: () => 'worker', subtle: {
+    digest: (...args) => ++calls === 1 ? pending.promise : webcrypto.subtle.digest(...args),
+  } } });
+  const old = digest(f, 'DIGEST_BEGIN', { byteLength: 33554432 });
+  await f.broker.digestMessage(old, sender());
+  const chunk = btoa('x'.repeat(262144));
+  for (let index = 0; index < 128; index++) await f.broker.digestMessage({ ...old, type: 'DIGEST_CHUNK', chunkIndex: index, data: chunk }, sender());
+  const hashing = f.broker.digestMessage({ ...old, type: 'DIGEST_END', chunkIndex: 128 }, sender());
+  const rejected = assert.rejects(hashing, code('external-timeout'));
+  const fresh = { ...old, transferId: 'fresh', byteLength: 3 };
+  await f.broker.digestMessage(fresh, sender());
+  await f.broker.digestMessage({ ...fresh, type: 'DIGEST_CHUNK', data: 'YWJj' }, sender());
+  await assert.rejects(f.broker.digestMessage({ ...old, sessionId: 'other', transferId: 'large-retry' }, sender()), code('memory-limit'));
+  pending.resolve(new Uint8Array(32).buffer); await rejected;
+  // Late old-hash release must not delete or invalidate this replacement.
+  assert.equal((await f.broker.digestMessage({ ...fresh, type: 'DIGEST_END', chunkIndex: 1 }, sender())).digest,
+    'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  await f.broker.digestMessage({ ...old, sessionId: 'other', transferId: 'after-settlement' }, sender());
+});
+
+test('native digest timeout retains memory reservation until native promise settles', async () => {
+  const clock = fakeClock(); const pending = deferred();
+  const f = await setup(undefined, { crypto: { randomUUID: () => 'worker', subtle: { digest: () => pending.promise } },
+    setTimeout: (fn, ms) => clock.schedule(fn, ms), clearTimeout: (cancel) => cancel?.(),
+  });
+  const old = digest(f, 'DIGEST_BEGIN', { byteLength: 33554432 });
+  await f.broker.digestMessage(old, sender());
+  const chunk = btoa('x'.repeat(262144));
+  for (let index = 0; index < 128; index++) await f.broker.digestMessage({ ...old, type: 'DIGEST_CHUNK', chunkIndex: index, data: chunk }, sender());
+  const hashing = f.broker.digestMessage({ ...old, type: 'DIGEST_END', chunkIndex: 128 }, sender());
+  const rejected = assert.rejects(hashing, code('external-timeout'));
+  await clock.advance(10000); await rejected;
+  await assert.rejects(f.broker.digestMessage({ ...old, sessionId: 'other', transferId: 'fresh' }, sender()), code('memory-limit'));
+  pending.resolve(new Uint8Array(32).buffer); await flush();
+  await f.broker.digestMessage({ ...old, sessionId: 'other', transferId: 'after-settlement' }, sender());
+});
 test('browser and content document identities are distinct and hello does not reset tile counter', async () => {
   const f = await setup();
   await f.broker.capture(f.request(), sender());

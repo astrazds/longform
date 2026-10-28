@@ -75,6 +75,34 @@ test('v6 reopen attaches to one capture and commit waits for the exact producer 
   reopened.disconnect(); owner.dispose();
 });
 
+test('concurrent clients grant one producer and losing disconnect cannot disturb the winner', async (t) => {
+  const producers = [];
+  const { owner, popup } = await sessionBridge({ send: async (_, options) => { producers.push(options); } });
+  t.after(() => owner.dispose());
+  popup.Longform.transfer = { receive: async () => new Blob(['png'], { type: 'image/png' }) };
+  const winner = await popup.Longform.popup.connectSession(1);
+  const loser = await popup.Longform.popup.connectSession(1);
+  t.after(() => { winner.disconnect(); loser.disconnect(); });
+  await winner.start('download'); await flush();
+  assert.equal(winner.snapshot().phase, 'ready-to-deliver');
+  assert.equal(loser.snapshot().phase, 'ready-to-deliver');
+
+  const results = await Promise.allSettled([winner.artifact(), loser.artifact()]);
+  assert.equal(producers.length, 1, 'only the port that acquires the owner may start production');
+  assert.equal(results[0].status, 'fulfilled');
+  assert.equal(results[1].status, 'rejected', 'losing client cannot obtain an artifact');
+  loser.disconnect(); await flush();
+  assert.equal(owner.snapshot().phase, 'transferring');
+  assert.equal(producers[0].ctx.signal.aborted, false);
+  producers[0].ctx.checkpoint();
+  const { transferId } = results[0].value;
+  assert.equal(transferId, producers[0].transferId);
+  await winner.commit(transferId);
+  assert.equal(owner.snapshot().phase, 'delivering');
+  await winner.result(transferId, 'success');
+  assert.equal(owner.snapshot().phase, 'completed');
+});
+
 for (const corruption of ['sequence', 'version', 'count', 'expiry']) {
   test(`client rejects ${corruption} corruption before replacing its authoritative snapshot`, async (t) => {
     const { owner, popup, links } = await sessionBridge();

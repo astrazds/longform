@@ -91,8 +91,13 @@
         else if (request.type === 'CANCEL') { owner.cancel(request.sessionId); post(request); }
         else if (request.type === 'ARTIFACT_BEGIN') {
           if (transfer) throw coded('transfer-failed');
+          // beginTransfer returns the current snapshot on refusal. A different
+          // port's transferring state does not grant this port production.
+          if (state.phase !== 'ready-to-deliver') throw coded('artifact-unavailable');
           const started = owner.beginTransfer(request.sessionId, request.transferId);
-          if (started.phase !== 'transferring') throw coded(started.errorCode || 'artifact-unavailable');
+          if (started.phase !== 'transferring' || started.sequence <= state.sequence) {
+            throw coded(started.errorCode || 'artifact-unavailable');
+          }
           const record = { ...started, transferId: request.transferId, controller: new AbortController() };
           transfer = record;
           // Store the exact promise before a final ACK can race COMMIT.

@@ -101,7 +101,16 @@
     };
     owner.subscribers.add(drain);
     const onResource = (event) => {
-      if (!disposed && event.target?.tagName === 'IMG') generation++;
+      const image = event.target;
+      if (disposed || image?.tagName !== 'IMG') return;
+      // A new request may complete between samples with the same source URL.
+      // Forget its old decode even when it is currently outside the viewport.
+      images.delete(image);
+      try {
+        if (visible(image, window.getComputedStyle(image), getPageMetrics())) generation++;
+      } catch {
+        // Sampling reports unreadable visible resources with its safe code.
+      }
     };
     document.addEventListener('load', onResource, true);
     document.addEventListener('error', onResource, true);
@@ -135,23 +144,33 @@
 
     function resource(image, source, cache, key) {
       let record = cache.get(key);
-      if (!record || record.source !== source || record.attempt !== ctx.attempt) {
+      const complete = image.complete;
+      if (!record || record.source !== source || record.attempt !== ctx.attempt
+        || (!complete && (record.status !== 'pending' || record.decoding))) {
         record = { image, source, status: 'pending', decoding: false, attempt: ctx.attempt };
         cache.set(key, record);
       }
-      if (record.status === 'pending' && image.complete) {
-        if (!(image.naturalWidth > 0)) record.status = 'failed';
-        else if (!record.decoding) {
+      // Read current browser readiness before trusting any cached decode. A
+      // same-URL reload can reset completion without changing source/attempt.
+      if (!complete) return false;
+      if (!(image.naturalWidth > 0)) record.status = 'failed';
+      if (record.status === 'pending') {
+        if (!record.decoding) {
           record.decoding = true;
           if (typeof image.decode !== 'function') record.status = 'ready';
           else {
+            const currentRequest = () => !disposed && !ctx.signal.aborted
+              && ctx.attempt === record.attempt && cache.get(key) === record
+              && image.complete && image.naturalWidth > 0
+              && (image.currentSrc || image.src) === source;
             Promise.resolve().then(() => {
               checkpoint(record.attempt);
+              if (!currentRequest()) throw codedError('resource-stale');
               return image.decode();
             }).then(() => {
-              if (!disposed && !ctx.signal.aborted && ctx.attempt === record.attempt) record.status = 'ready';
+              if (currentRequest()) record.status = 'ready';
             }, () => {
-              if (!disposed && !ctx.signal.aborted && ctx.attempt === record.attempt) record.status = 'failed';
+              if (currentRequest()) record.status = 'failed';
             });
           }
         }

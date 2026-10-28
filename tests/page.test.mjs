@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadRuntime, flush, fakeClock } from './helpers/runtime.mjs';
+import { loadRuntime, flush, fakeClock, deferred } from './helpers/runtime.mjs';
 
 // A CSSOM boundary double: production reads and writes real declaration values,
 // priorities, and presence. It does not replace any transaction behavior.
@@ -240,6 +240,37 @@ test('clipped images and unrelated network traffic do not block settling', async
   observer.dispose();
 });
 
+test('repeated offscreen and clipped image events do not invalidate visible settling', async () => {
+  const env = await layoutSetup();
+  const parent = env.element({ computed: { overflow: 'hidden' },
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) });
+  const image = env.element({ tagName: 'IMG', complete: false,
+    getBoundingClientRect: () => ({ left: 0, top: 700, right: 100, bottom: 800, width: 100, height: 100 }) });
+  const clipped = env.element({ tagName: 'IMG', complete: false, parentElement: parent,
+    getBoundingClientRect: () => ({ left: 0, top: 200, right: 100, bottom: 300, width: 100, height: 100 }) });
+  env.elements.push(image, clipped);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  let settled;
+  const pending = observer.settleVisible().then((sample) => { settled = sample; });
+  pending.catch(() => {});
+  for (const ms of [50, 100, 150]) env.clock.schedule(() => {
+    env.listeners.get('load')({ target: image });
+    env.listeners.get('error')({ target: clipped });
+  }, ms);
+  try {
+    await env.clock.advance(150);
+    assert.equal(observer.sample().generation, before.generation);
+    assert.equal(settled?.visibleResourcesReady, true);
+    await pending;
+    image.getBoundingClientRect = env.body.getBoundingClientRect;
+    image.complete = true;
+    image.naturalWidth = 10;
+    env.listeners.get('load')({ target: image });
+    assert.ok(observer.sample().generation > before.generation);
+  } finally { observer.dispose(); }
+});
+
 test('unreadable resources fail with a safe specific code', async () => {
   const env = await layoutSetup();
   env.body.getBoundingClientRect = () => { throw new Error('private URL'); };
@@ -291,6 +322,79 @@ test('broken images and failed decode are resource failures', async () => {
     await result;
     observer.dispose();
   }
+});
+
+test('a same URL image reload rechecks readiness and decodes the new request', async () => {
+  const env = await layoutSetup();
+  let decodes = 0;
+  const image = env.element({ tagName: 'IMG', src: 'same.png', complete: true, naturalWidth: 20,
+    decode() { decodes++; return Promise.resolve(); } });
+  env.elements.push(image);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  try {
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, true);
+    image.complete = false;
+    image.naturalWidth = 0;
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    let settled = false;
+    const pending = observer.settleVisible().then(() => { settled = true; });
+    pending.catch(() => {});
+    await env.clock.advance(300);
+    assert.equal(settled, false);
+    image.complete = true;
+    image.naturalWidth = 20;
+    await env.clock.advance(450);
+    await pending;
+    assert.equal(decodes, 2);
+    image.naturalWidth = 0;
+    assert.throws(() => observer.sample(), { code: 'resource-failed' });
+  } finally { observer.dispose(); }
+});
+
+test('an old decode cannot complete a later request for the same image URL', async () => {
+  const env = await layoutSetup();
+  const decodes = [];
+  const image = env.element({ tagName: 'IMG', src: 'same.png', complete: true, naturalWidth: 20,
+    decode() { const pending = deferred(); decodes.push(pending); return pending.promise; } });
+  env.elements.push(image);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  try {
+    observer.sample();
+    await flush();
+    image.complete = false;
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    image.complete = true;
+    observer.sample();
+    await flush();
+    assert.equal(decodes.length, 2);
+    decodes[0].resolve();
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    decodes[1].resolve();
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, true);
+  } finally { observer.dispose(); }
+});
+
+test('image completion events invalidate the cached decode for an unchanged URL', async () => {
+  const env = await layoutSetup();
+  let decodes = 0;
+  const image = env.element({ tagName: 'IMG', src: 'same.png', complete: true, naturalWidth: 20,
+    decode() { decodes++; return Promise.resolve(); } });
+  env.elements.push(image);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  try {
+    observer.sample();
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, true);
+    env.listeners.get('load')({ target: image });
+    assert.equal(observer.sample().visibleResourcesReady, false);
+    await flush();
+    assert.equal(observer.sample().visibleResourcesReady, true);
+    assert.equal(decodes, 2);
+  } finally { observer.dispose(); }
 });
 
 test('computed backgrounds settle while offscreen images do not block', async () => {

@@ -9,8 +9,14 @@
   const coded = (code) => Object.assign(new Error(code), { code });
   const safeCode = (code, fallback) => typeof code === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(code) ? code : fallback;
   const token = (value) => typeof value === 'string' && value.length > 0 && value.length <= 200;
-  const identity = () => globalThis.crypto?.randomUUID?.()
-    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const identity = () => {
+    const crypto = globalThis.crypto;
+    if (typeof crypto?.randomUUID === 'function') return crypto.randomUUID();
+    // randomUUID requires a secure context; getRandomValues also works on HTTP.
+    if (typeof crypto?.getRandomValues !== 'function') throw coded('crypto-unavailable');
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  };
   let installed;
 
   /**

@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
+import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 
 export async function loadContext(files, globals = {}) {
   const context = vm.createContext({
-    Blob, Uint8Array, AbortController, atob, btoa, setTimeout, clearTimeout, ...globals,
+    Blob, Uint8Array, AbortController, atob, btoa, setTimeout, clearTimeout, crypto: webcrypto, ...globals,
   });
   context.globalThis = context;
   for (const file of ['protocol.js', ...files]) await inject(context, file);

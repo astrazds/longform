@@ -1,8 +1,61 @@
 import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 import test from 'node:test';
 import { loadContext, inject, loadRuntime, deferred, flush, fakeClock } from './helpers/runtime.mjs';
 
 const png = () => new Blob(['png'], { type: 'image/png' });
+
+test('HTTP contexts use 128-bit cryptographic document and session identities without randomUUID', async () => {
+  const crypto = { getRandomValues: webcrypto.getRandomValues.bind(webcrypto) };
+  const identities = [];
+  for (let document = 0; document < 2; document++) {
+    const clock = fakeClock();
+    const { sessions } = await loadRuntime(['capture-session.js'], { crypto });
+    const owner = sessions.install({ run: async () => png(), now: clock.now, schedule: clock.schedule });
+    identities.push(owner.snapshot().documentId);
+    const first = owner.start({ destination: 'download' }); await flush();
+    identities.push(first.sessionId);
+    owner.beginTransfer(first.sessionId, 'first');
+    owner.commitDelivery(first.sessionId, 'first');
+    owner.finishDelivery(first.sessionId, 'first', 'failed');
+    const recovery = owner.start({ destination: 'download' });
+    identities.push(recovery.sessionId);
+    assert.equal(recovery.phase, 'ready-to-deliver');
+    owner.beginTransfer(recovery.sessionId, 'recovery');
+    owner.commitDelivery(recovery.sessionId, 'recovery');
+    owner.finishDelivery(recovery.sessionId, 'recovery', 'success');
+    const next = owner.start({ destination: 'download' }); await flush();
+    identities.push(next.sessionId);
+    assert.equal(owner.snapshot().phase, 'ready-to-deliver');
+    assert.equal(next.documentId, first.documentId);
+    owner.dispose();
+  }
+  for (const id of identities) assert.match(id, /^[a-f0-9]{32}$/);
+  assert.equal(new Set(identities).size, identities.length);
+});
+
+test('session installation fails closed when cryptographic randomness is unavailable', async () => {
+  for (const crypto of [undefined, {}]) {
+    const { sessions } = await loadRuntime(['capture-session.js'], { crypto });
+    assert.throws(() => sessions.install({ run: () => assert.fail('capture must not start') }),
+      { code: 'crypto-unavailable' });
+  }
+});
+
+test('session creation fails closed if cryptographic randomness becomes unavailable', async () => {
+  const context = await loadContext(['capture-session.js']);
+  const clock = fakeClock();
+  let captures = 0;
+  const owner = context.Longform.sessions.install({ run: () => { captures++; return png(); },
+    now: clock.now, schedule: clock.schedule });
+  context.crypto = {};
+  assert.throws(() => owner.start({ destination: 'download' }), { code: 'crypto-unavailable' });
+  assert.equal(owner.snapshot().phase, 'idle');
+  assert.equal(owner.snapshot().sessionId, null);
+  assert.equal(captures, 0);
+  owner.dispose();
+});
+
 test('explicit recovery creates a delivery-only session with original TTL and stale callbacks fenced', async () => {
   let calls = 0;
   const { owner, clock } = await setup(async () => { calls++; return png(); });

@@ -44,7 +44,7 @@ Longform if you want its icon to stay in the toolbar.
 - Choose **Copy** to put the PNG on your clipboard, then paste it into an app
   that accepts images.
 
-Keep the popup open until it says **Saved.** or **Copied.** Both buttons are
+Keep the popup open until it says **Download started.** or **Copied.** Both buttons are
 disabled during capture. The page returns to its original scroll position
 when capture finishes or fails. If copying fails, the popup explains how to
 retry or save the screenshot instead.

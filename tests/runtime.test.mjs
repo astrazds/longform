@@ -2,9 +2,165 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
-import { loadRuntime } from './helpers/runtime.mjs';
+import { loadRuntime, loadContext, inject, deferred, flush } from './helpers/runtime.mjs';
 
 const { geometry } = await loadRuntime(['capture-geometry.js']);
+
+function event() {
+  const listeners = new Set();
+  return { addListener: (fn) => listeners.add(fn), removeListener: (fn) => listeners.delete(fn),
+    emit: (...args) => [...listeners].forEach((fn) => fn(...args)), size: () => listeners.size };
+}
+function ports() {
+  const a = { name: 'longform-session:v6', onMessage: event(), onDisconnect: event() };
+  const b = { name: a.name, onMessage: event(), onDisconnect: event(), sender: { id: 'extension', frameId: 0 } };
+  a.postMessage = (message) => queueMicrotask(() => b.onMessage.emit(message));
+  b.postMessage = (message) => queueMicrotask(() => a.onMessage.emit(message));
+  a.disconnect = b.disconnect = () => { a.onDisconnect.emit(); b.onDisconnect.emit(); };
+  return [a, b];
+}
+async function sessionBridge({ run, send = async () => {} } = {}) {
+  const onConnect = event();
+  const context = await loadContext(['capture-session.js'], {
+    chrome: { runtime: { id: 'extension', onConnect, onMessage: event() } },
+    window: { top: null, addEventListener() {} },
+  });
+  context.window.top = context.window;
+  context.Longform.capture = { run: run || (async () => new Blob(['png'], { type: 'image/png' })) };
+  context.Longform.transfer = { send };
+  await inject(context, 'content.js');
+  const owner = context.Longform.sessions.install({ run });
+  const links = [];
+  const connect = () => { const [a,b] = ports(); links.push(b); onConnect.emit(b); return a; };
+  const popup = await loadContext(['clipboard.js', 'popup.js'], {
+    document: { addEventListener() {} }, location: { protocol: 'chrome-extension:' },
+    crypto: { randomUUID: () => `id-${Math.random()}` },
+    chrome: { tabs: { connect }, runtime: { id: 'extension' } },
+  });
+  return { context, owner, popup, onConnect, links };
+}
+
+test('v6 reopen attaches to one capture and commit waits for the exact producer promise', async () => {
+  const work = deferred(); const sent = deferred(); let calls = 0;
+  const { context, owner, popup, onConnect } = await sessionBridge({
+    run: () => { calls++; return work.promise; }, send: () => sent.promise,
+  });
+  assert.equal(typeof popup.Longform.popup?.connectSession, 'function', 'managed session client exists');
+  const first = await popup.Longform.popup.connectSession(1);
+  const original = await first.start('download');
+  first.disconnect();
+  await inject(context, 'capture-geometry.js'); await inject(context, 'capture-page.js');
+  const dependencies = { ...context.Longform };
+  for (const file of context.Longform.protocol.contentFiles) await inject(context, file);
+  for (const name of ['geometry', 'page', 'capture', 'sessions', 'transfer']) assert.equal(context.Longform[name], dependencies[name]);
+  assert.equal(onConnect.size(), 1, 'reinjection does not replace subscription owner');
+  const reopened = await popup.Longform.popup.connectSession(1);
+  assert.equal(reopened.snapshot().sessionId, original.sessionId);
+  work.resolve(new Blob(['png'], { type: 'image/png' })); await flush();
+  // The receiver is independently tested; this boundary exercises producer/commit ordering.
+  popup.Longform.transfer = { receive: async () => new Blob(['png'], { type: 'image/png' }) };
+  const artifact = await reopened.artifact();
+  const commit = reopened.commit(artifact.transferId);
+  await flush();
+  assert.equal(owner.snapshot().phase, 'transferring');
+  sent.resolve();
+  await commit;
+  assert.equal(owner.snapshot().phase, 'delivering');
+  await reopened.result(artifact.transferId, 'success');
+  assert.equal(owner.snapshot().phase, 'completed');
+  assert.equal(calls, 1);
+  await reopened.start('clipboard'); await flush();
+  assert.equal(reopened.snapshot().phase, 'ready-to-deliver');
+  await reopened.artifact();
+  reopened.disconnect(); owner.dispose();
+});
+
+for (const corruption of ['sequence', 'version', 'count', 'expiry']) {
+  test(`client rejects ${corruption} corruption before replacing its authoritative snapshot`, async (t) => {
+    const { owner, popup, links } = await sessionBridge();
+    t.after(() => owner.dispose());
+    const client = await popup.Longform.popup.connectSession(1);
+    await client.start('download'); await flush();
+    const original = client.snapshot();
+    let alive = true; client.subscribe((_, connected) => { alive = connected; });
+    const snapshot = { ...original };
+    if (corruption === 'sequence') snapshot.sequence--;
+    if (corruption === 'count') snapshot.sections = -1;
+    if (corruption === 'expiry') snapshot.expiresAt = 'tomorrow';
+    links[0].postMessage({ type: 'SNAPSHOT', protocolVersion: 6,
+      runtimeVersion: corruption === 'version' ? 'old-runtime' : '2026-10-28-managed-v1',
+      documentId: snapshot.documentId, sessionId: snapshot.sessionId, requestId: 'corrupt', snapshot });
+    await flush();
+    assert.equal(alive, false);
+    assert.equal(client.snapshot(), original);
+    owner.dispose();
+  });
+}
+
+test('a lost commit reply records unknown and rejects without repeating delivery', async (t) => {
+  const { owner, popup, links } = await sessionBridge();
+  t.after(() => owner.dispose());
+  popup.Longform.transfer = { receive: async () => new Blob(['png'], { type: 'image/png' }) };
+  const client = await popup.Longform.popup.connectSession(1);
+  await client.start('download'); await flush();
+  const artifact = await client.artifact();
+  const post = links[0].postMessage;
+  let dropped = false;
+  links[0].postMessage = (reply) => {
+    if (!dropped && reply.replyTo && reply.snapshot.phase === 'delivering') { dropped = true; throw new Error('Popup closed'); }
+    post(reply);
+  };
+  await assert.rejects(() => client.commit(artifact.transferId), { code: 'delivery-unknown' });
+  assert.equal(owner.snapshot().deliveryOutcome, 'unknown');
+  assert.equal(owner.snapshot().phase, 'failed');
+  assert.ok(owner.artifact(client.snapshot().sessionId) instanceof Blob);
+});
+
+test('popup cancellation waits for runner cleanup and disconnect does not cancel capture', async () => {
+  const work = deferred(); let runContext;
+  const { owner, popup } = await sessionBridge({ run: (ctx) => { runContext = ctx; return work.promise; } });
+  const client = await popup.Longform.popup.connectSession(1);
+  const start = await client.start('download'); client.disconnect();
+  assert.equal(runContext.signal.aborted, false);
+  const recovery = await popup.Longform.popup.connectSession(1);
+  assert.equal(recovery.snapshot().sessionId, start.sessionId);
+  await recovery.cancel();
+  assert.equal(runContext.signal.aborted, true);
+  assert.equal(recovery.snapshot().phase, 'cancelling');
+  work.resolve(new Blob(['png'], { type: 'image/png' })); await flush();
+  assert.equal(recovery.snapshot().phase, 'cancelled');
+  await assert.rejects(() => recovery.artifact(), { code: 'artifact-unavailable' });
+  recovery.disconnect(); owner.dispose();
+});
+
+test('legacy runtime is rejected before protocol replacement', async () => {
+  const context = vm.createContext({ Longform: { captureFullPage() {} } });
+  const legacy = context.Longform;
+  assert.throws(() => vm.runInContext(awaitProtocol, context), { code: 'reload-required' });
+  assert.equal(context.Longform, legacy);
+  assert.equal(context.Longform.protocol, undefined);
+});
+const awaitProtocol = await readFile(new URL('../protocol.js', import.meta.url), 'utf8');
+
+test('snapshot renderer keeps progress incomplete through cleanup and offers explicit recovery', async () => {
+  const { popup } = await loadRuntime(['clipboard.js', 'popup.js'], { document: { addEventListener() {} } });
+  assert.equal(typeof popup?.view, 'function', 'snapshot renderer exists');
+  const base = { phase: 'preparing', section: 0, sections: 0, attempt: 1, canCancel: true };
+  assert.equal(popup.view(base, true, true).text, 'Preparing page…');
+  assert.equal(popup.view(base, true, true).determinate, false);
+  for (const phase of ['capturing', 'validating', 'restoring', 'encoding', 'transferring']) {
+    const view = popup.view({ ...base, phase, section: 12, sections: 12 }, true, true);
+    assert.equal(view.busy, true); assert.equal(view.cancel, true);
+    assert.equal(view.value < 1, true, 'cleanup precedes complete progress');
+  }
+  assert.equal(popup.view({ ...base, phase: 'ready-to-deliver' }, true, true).text,
+    'Capture ready. Choose Save or Copy.');
+  assert.equal(popup.view({ ...base, phase: 'expired' }, true, true).busy, false);
+  assert.match(popup.view({ ...base, phase: 'failed', deliveryOutcome: 'unknown' }, true, true).text, /may have completed/);
+  assert.equal(popup.view({ ...base, phase: 'failed', deliveryOutcome: 'unknown', expiresAt: 100 }, true, true, 100).text,
+    'Delivery may have completed. Capture expired. Choose Save or Copy to capture again.');
+  assert.equal(popup.view({ ...base, phase: 'completed', destination: 'download' }, true, true).text, 'Download started.');
+});
 
 test('tile planning covers both edges and retains the actual scroll limit', () => {
   assert.deepEqual([...geometry.getCapturePositions(2000, 720, 1280)], [0, 560, 1120, 1280]);
@@ -47,77 +203,6 @@ test('fractional scroll coordinates use device pixels without crossing canvas ed
     left: 125, top: 500, right: 875, bottom: 1000,
   });
   assert.deepEqual(calls, [[bitmap, 0, 0, 750, 500, 125, 500, 750, 500]]);
-});
-
-test('clipboard payloads are decoded as PNG bytes and malformed payloads fail', async () => {
-  const { clipboard } = await loadRuntime(['clipboard.js']);
-  const blob = clipboard.pngBase64ToBlob('iVBORw0KGgo=');
-  assert.equal(blob.type, 'image/png');
-  assert.equal(Buffer.from(await blob.arrayBuffer()).toString('hex'), '89504e470d0a1a0a');
-  assert.throws(() => clipboard.pngBase64ToBlob(''), /did not return image data/);
-  assert.throws(() => clipboard.pngBase64ToBlob('aGVsbG8='), /invalid PNG/);
-});
-
-test('clipboard write starts before capture resolves', async () => {
-  let resolveCapture;
-  const capture = new Promise((resolve) => { resolveCapture = resolve; });
-  let writtenItems;
-  const { clipboard } = await loadRuntime(['clipboard.js'], {
-    location: { protocol: 'chrome-extension:' },
-    navigator: { clipboard: { write: (items) => { writtenItems = items; return Promise.resolve(); } } },
-    ClipboardItem: class { constructor(data) { this.data = data; } },
-  });
-  const write = clipboard.copyDuringGesture(() => capture.then(() => ({
-    clipboardPngBase64: 'iVBORw0KGgo=',
-  })));
-  assert.equal(typeof writtenItems[0].data['image/png'].then, 'function');
-  resolveCapture();
-  assert.equal(`${(await write).phrase}`, 'copied');
-});
-
-test('png bytes round-trip through base64 above one chunk', async () => {
-  const { clipboard } = await loadRuntime(['clipboard.js']);
-  const bytes = new Uint8Array(0x8001);
-  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const blob = await clipboard.pngBase64ToBlob(await clipboard.pngBlobToBase64(new Blob([bytes])));
-  assert.equal(Buffer.from(await blob.arrayBuffer()).length, bytes.length);
-});
-
-test('copyDuringGesture refuses a page document', async () => {
-  let writes = 0;
-  const { clipboard } = await loadRuntime(['clipboard.js'], {
-    location: { protocol: 'https:' },
-    navigator: { clipboard: { write: () => { writes += 1; return Promise.resolve(); } } },
-    ClipboardItem: class { constructor(data) { this.data = data; } },
-  });
-  await assert.rejects(
-    () => clipboard.copyDuringGesture(() => Promise.resolve({})),
-    /popup/,
-  );
-  assert.equal(writes, 0);
-});
-
-test('an early clipboard rejection waits for capture and keeps a capture code', async () => {
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const { clipboard } = await loadRuntime(['clipboard.js'], {
-    location: { protocol: 'chrome-extension:' },
-    navigator: {
-      clipboard: {
-        write: () => Promise.reject(Object.assign(new Error('PNG too large to copy'), { code: 'copy-too-large' })),
-      },
-    },
-    ClipboardItem: class { constructor(data) { this.data = data; } },
-  });
-  const pending = clipboard.copyDuringGesture(() => gate.then(() => {
-    throw Object.assign(new Error('too big'), { code: 'page-too-large' });
-  }));
-  let settled = false;
-  pending.then(() => { settled = true; });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(settled, false);
-  release();
-  assert.equal(`${(await pending).phrase}`, 'page-too-large');
 });
 
 test('clipboard write starts in original gesture', async () => {
@@ -164,30 +249,4 @@ test('blob clipboard preserves unknown commit outcome', async () => {
     throw Object.assign(new Error('disconnected'), { code: 'delivery-unknown' });
   });
   assert.equal(result.deliveryOutcome, 'unknown');
-});
-
-test('upgrading and reinjecting the content entry uses the current capture exactly once', async () => {
-  const listeners = new Set([
-    (request, sender, reply) => {
-      if (request.type === 'captureFullPage:v4') reply({ artifact: 'legacy' });
-    },
-  ]);
-  const context = vm.createContext({
-    window: { __longformContentScriptVersion: '2026-09-04-clipboard-base64-v2' },
-    chrome: { runtime: { onMessage: {
-      addListener: (listener) => listeners.add(listener),
-      removeListener: (listener) => listeners.delete(listener),
-    } } },
-  });
-  vm.runInContext(await readFile(new URL('../protocol.js', import.meta.url), 'utf8'), context);
-  context.Longform.captureFullPage = async () => ({ artifact: 'current' });
-  const entry = await readFile(new URL('../content.js', import.meta.url), 'utf8');
-  vm.runInContext(entry, context);
-  vm.runInContext(entry, context);
-  const artifacts = [];
-  for (const listener of listeners) {
-    listener({ type: context.Longform.protocol.fullPageMessage }, {}, (response) => artifacts.push(response.artifact));
-  }
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(artifacts, ['current']);
 });

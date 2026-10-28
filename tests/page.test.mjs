@@ -494,11 +494,13 @@ test('priorities and newer page edits survive', async () => {
   assert.equal(result.ok, true);
 });
 
-test('legacy adapter retains the supplied original metrics position', async () => {
+test('transaction retains the original fractional position', async () => {
   const env = await setup();
-  await env.page.withPreparedState({ scrollX: 7.5, scrollY: 80.25 }, async ({ scrollTo }) => {
-    await scrollTo(400, 700);
-  });
+  env.window.scrollX = 7.5; env.window.scrollY = 80.25;
+  const transaction = env.page.beginTransaction(env.ctx);
+  await transaction.prepare();
+  await transaction.scrollTo(400, 700);
+  await transaction.restore();
   assert.deepEqual([env.window.scrollX, env.window.scrollY], [7.5, 80.25]);
 });
 
@@ -560,13 +562,16 @@ test('paint waits are bounded when animation frames stop', async () => {
 });
 
 for (const fails of [false, true]) {
-  test(`legacy adapter restores after ${fails ? 'failed' : 'successful'} capture`, async () => {
+  test(`transaction restores after ${fails ? 'failed' : 'successful'} capture`, async () => {
     const env = await setup();
-    const capture = env.page.withPreparedState({ scrollX: 17.5, scrollY: 96.25 }, async ({ scrollTo }) => {
-      await scrollTo(400, 700);
-      if (fails) throw new Error('capture failed');
-      return 'image';
-    });
+    const capture = (async () => {
+      const transaction = env.page.beginTransaction(env.ctx);
+      try {
+        await transaction.prepare(); await transaction.scrollTo(400, 700);
+        if (fails) throw new Error('capture failed');
+        return 'image';
+      } finally { await transaction.restore(); }
+    })();
     if (fails) await assert.rejects(capture, /capture failed/);
     else assert.equal(await capture, 'image');
     assert.deepEqual([env.window.scrollX, env.window.scrollY], [17.5, 96.25]);

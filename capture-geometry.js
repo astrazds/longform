@@ -1,4 +1,5 @@
 (() => {
+  if (Longform.geometry) return;
   const CAPTURE_OVERLAP_CSS_PX = 160;
   const MAX_CANVAS_DIMENSION = 32767;
   const MAX_CANVAS_AREA = 268435456;
@@ -138,6 +139,5 @@
     getCanvasSize,
     drawCapture,
     createCoverage,
-    partialCaptureTolerance: 2,
   });
 })();

@@ -17,7 +17,7 @@ The [popup](../popup.html) shows **Full-page screenshot**, **Save**, and
 step, source selector, settings panel, or image editor.
 
 The popup is quiet when ready. During capture, both buttons are disabled and
-one status message reports progress. Success is **Saved.** or **Copied.**
+one status message reports progress. Success is **Download started.** or **Copied.**
 Errors give a short recovery instruction. Unsupported pages disable both
 actions; unsupported clipboard writes leave Save available.
 

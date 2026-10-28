@@ -203,8 +203,28 @@
       start({ destination } = {}) {
         fresh();
         if (disposed || blocked) throw coded('reload-required');
-        if (current && !current.terminal) return state;
         if (!['download', 'clipboard'].includes(destination)) throw coded('invalid-destination');
+        if (current && !current.terminal) {
+          return state.phase === 'ready-to-deliver' && state.destination !== destination
+            ? emit({ destination }) : state;
+        }
+        // An explicit recovery gesture gets a new delivery-only identity. Old
+        // terminal callbacks stay fenced; neither retention nor work is renewed.
+        if (current?.blob && state.phase === 'failed' && current.expiresAt > now()) {
+          const previous = current;
+          previous.stopRetention?.();
+          const session = { id: identity(), generation: ++generation, attempt: previous.attempt,
+            controller: new AbortController(), running: false, terminal: false,
+            remaining: previous.remaining, activeSince: null, blob: previous.blob,
+            expiresAt: previous.expiresAt, transferId: null, committed: false,
+            abortCode: null, transfers: new Set() };
+          previous.blob = null;
+          current = session;
+          session.stopRetention = schedule(() => expire(session), session.expiresAt - now());
+          return emit({ sessionId: session.id, attempt: session.attempt,
+            phase: 'ready-to-deliver', destination, section: 0, sections: 0,
+            canCancel: true, expiresAt: session.expiresAt, errorCode: null, deliveryOutcome: null });
+        }
         if (current) clearArtifact(current);
         const session = { id: identity(), generation: ++generation, attempt: 1,
           controller: new AbortController(), running: true, terminal: false,

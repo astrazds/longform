@@ -13,9 +13,13 @@
       <button id="screenshotBtn" type="button" class="button-primary" disabled></button>
       <button id="copyBtn" type="button" class="button-secondary" disabled></button>
     </div>
+    <progress id="progress" max="1" aria-label="Capture progress" hidden></progress>
+    <button id="cancelBtn" type="button" class="button-secondary" hidden>Cancel</button>
     <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
   </main>
   <script src="protocol.js"></script>
+  <script src="capture-transfer.js"></script>
+  <script src="capture-delivery.js"></script>
   <script src="clipboard.js"></script>
   <script src="popup.js"></script>
 </body>

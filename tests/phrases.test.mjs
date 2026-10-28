@@ -71,4 +71,5 @@ test('current popup labels are in the phrase table', async () => {
     assert.equal(owned.has(span), true, span);
   }
   assert.equal(owned.has('Copy PNG'), false);
+  assert.equal(context.Longform.clipboard.phrases.saved.text, 'Download started.');
 });

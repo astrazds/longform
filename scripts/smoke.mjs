@@ -33,67 +33,38 @@ const mimeTypes = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
 };
-const smokeHarnessHtml = '<!doctype html><meta charset="utf-8"><title>Longform smoke</title><script src="protocol.js"></script><script src="smoke.js"></script>';
+const smokeHarnessHtml = '<!doctype html><meta charset="utf-8"><title>Longform smoke</title><script src="protocol.js"></script><script src="capture-transfer.js"></script><script src="capture-delivery.js"></script><script src="clipboard.js"></script><script src="popup.js"></script><script src="smoke.js"></script>';
 const smokeHarnessScript = `
-const FULL_PAGE_MESSAGE_TYPE = Longform.protocol.fullPageMessage;
 const params = new URL(location.href).searchParams;
 const targetUrl = params.get('targetUrl') || '';
 const filename = params.get('filename') || 'longform-capture-smoke.png';
-
-const setState = (patch) => {
-  window.__longformSmoke = {
-    ...(window.__longformSmoke || {}),
-    ...patch,
-    at: new Date().toISOString(),
-  };
-};
-
+const setState = (patch) => { window.__longformSmoke = { ...(window.__longformSmoke || {}), ...patch, at: new Date().toISOString() }; };
 (async () => {
   setState({ status: 'booting', targetUrl });
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((candidate) => candidate.url === targetUrl);
-
-  if (!tab?.id) {
-    throw new Error('Smoke target tab not found');
-  }
-
+  if (!tab?.id) throw new Error('Smoke target tab not found');
   await chrome.tabs.update(tab.id, { active: true });
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    files: Longform.protocol.contentFiles,
+  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: Longform.protocol.contentFiles });
+  const client = await Longform.popup.connectSession(tab.id);
+  await client.start('download');
+  await new Promise((resolve, reject) => {
+    let unsubscribe;
+    const check = (state) => {
+      if (state.phase === 'ready-to-deliver') { unsubscribe?.(); resolve(); }
+      else if (['failed','expired','cancelled'].includes(state.phase)) { unsubscribe?.(); reject(Object.assign(new Error(state.errorCode || state.phase), { code: state.errorCode })); }
+    };
+    unsubscribe = client.subscribe(check);
+    if (['ready-to-deliver','failed','expired','cancelled'].includes(client.snapshot().phase)) unsubscribe();
   });
-
-  const response = await chrome.tabs.sendMessage(tab.id, {
-    delivery: 'download',
-    filename,
-    type: FULL_PAGE_MESSAGE_TYPE,
-  });
-
-  if (!response?.success) {
-    const error = new Error(response?.error || 'Capture failed');
-    error.captureDiagnostics = response?.diagnostics;
-    throw error;
-  }
-
-  setState({
-    artifact: response.artifact,
-    captureDiagnostics: response.diagnostics,
-    filename,
-    status: 'success',
-    success: true,
-    targetTabId: tab.id,
-    targetWindowId: tab.windowId,
-  });
-})().catch((error) => {
-  setState({
-    captureDiagnostics: error.captureDiagnostics,
-    error: error.message || 'Smoke capture failed',
-    status: 'error',
-    success: false,
-  });
-});
+  const { blob, transferId } = await client.artifact();
+  await client.commit(transferId);
+  Longform.delivery.save(blob, filename);
+  await client.result(transferId, 'success');
+  setState({ artifact: { byteSize: blob.size, delivery: 'download' }, filename, status: 'success', success: true, targetTabId: tab.id, targetWindowId: tab.windowId });
+  client.disconnect();
+})().catch((error) => setState({ error: error.message || 'Smoke capture failed', errorCode: error.code, status: 'error', success: false }));
 `;
-
 function recordCheckpoint(checkpoints, name, payload = {}) {
   checkpoints.push({
     name,
@@ -356,7 +327,10 @@ async function runCaptureTarget({
   });
 
   const requestedFilename = `longform-capture-smoke-${label}.png`;
-  const downloadPromise = targetPage.waitForEvent('download', { timeout: 45000 });
+  let downloadObserved = false;
+  const originalState = await targetPage.evaluate(() => ({ x: scrollX, y: scrollY, styles: [...document.querySelectorAll('*')].map((node) => node.getAttribute('style')) }));
+  const downloadPromise = harnessPage.waitForEvent('download', { timeout: 45000 }).then((download) => { downloadObserved = true; return download; });
+  downloadPromise.catch(() => {});
   const harnessUrl = `chrome-extension://${extensionId}/smoke.html?targetUrl=${encodeURIComponent(targetUrl)}&filename=${encodeURIComponent(requestedFilename)}`;
   await harnessPage.goto(harnessUrl, { waitUntil: 'domcontentloaded' });
   await harnessPage.waitForFunction(
@@ -374,6 +348,12 @@ async function runCaptureTarget({
     recordCheckpoint(checkpoints, `${label}.capture.failed`, {
       smokeResult,
     });
+    if (label === 'near-limit' && smokeResult?.errorCode === 'page-too-large') {
+      assert.equal(downloadObserved, false, 'Memory rejection produces no output');
+      assert.deepEqual(await targetPage.evaluate(() => ({ x: scrollX, y: scrollY, styles: [...document.querySelectorAll('*')].map((node) => node.getAttribute('style')) })), originalState, 'Memory rejection restores page');
+      await harnessPage.close(); await targetPage.close();
+      return { label, pageMetrics, smokeResult, safelyRejected: true, output: false, restored: true };
+    }
     throw new Error(
       `Capture failed for ${label}: ${smokeResult?.error || 'Unknown smoke failure'}`
     );
@@ -574,6 +554,7 @@ try {
   }
 
   const extensionId = new URL(serviceWorker.url()).host;
+  assert.deepEqual(await serviceWorker.evaluate(() => Longform.protocol.contentFiles), contentFiles);
   recordCheckpoint(checkpoints, 'extension.loaded', {
     extensionId,
     serviceWorkerUrl: serviceWorker.url(),

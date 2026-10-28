@@ -1,4 +1,5 @@
 (() => {
+  if (Longform.page) return;
   const sampleDelayMs = 150;
   const stableSamplesRequired = 2;
   const operationTimeoutMs = 10000;
@@ -7,7 +8,7 @@
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const waitForPaint = () => new Promise((resolve) => {
     // Hidden documents may stop producing frames. The timer also bounds the
-    // legacy measurement path; cleanup itself never waits for paint.
+    // preparation path; cleanup itself never waits for paint.
     const timeout = setTimeout(resolve, 100);
     requestAnimationFrame(() => requestAnimationFrame(() => {
       clearTimeout(timeout);
@@ -419,17 +420,6 @@
     return '#ffffff';
   }
 
-  async function withPreparedState(metrics, capture) {
-    const transaction = createTransaction({ checkpoint() {} }, { left: metrics.scrollX, top: metrics.scrollY });
-    try {
-      await transaction.prepare();
-      return await capture({ scrollTo: transaction.scrollTo });
-    } finally {
-      const cleanup = await transaction.restore();
-      if (!cleanup.ok) throw Object.assign(new Error('Page restoration failed'), { code: 'cleanup-failed' });
-    }
-  }
-
   Longform.page = Object.freeze({
     measure: getPageMetrics,
     backgroundColor: getPageBackgroundColor,
@@ -437,6 +427,5 @@
     observeLayout,
     sampleDelayMs,
     stableSamplesRequired,
-    withPreparedState,
   });
 })();

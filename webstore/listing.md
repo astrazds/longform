@@ -22,7 +22,7 @@ Capture the current web page as one full-page PNG, then save it locally or copy 
 
 Longform captures a scrollable web page as one PNG. Open a regular web page,
 click the Longform toolbar icon, and choose **Save** or **Copy**. Keep the
-popup open until it says **Saved.** or **Copied.**
+popup open until it says **Download started.** or **Copied.**
 
 Use the image in a design review, page audit, QA report, or another app that
 accepts images. No account is required.
@@ -72,7 +72,7 @@ Longform does not collect user data. Page content is processed locally only to c
 4. Confirm the popup shows **Full-page screenshot**, **Save**, and **Copy**.
    On a supported page with clipboard support, the status is empty at rest.
 5. Click **Save**. Confirm both buttons stay disabled during capture, the PNG
-   downloads, and the popup reports **Saved.** Check the image and restored
+   downloads, and the popup reports **Download started.** Check the image and restored
    page scroll position.
 6. Reopen the popup and click **Copy** on a supported browser. Keep the popup
    open until **Copied.**, then paste into an app that accepts PNG images.

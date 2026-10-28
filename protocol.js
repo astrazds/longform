@@ -1,4 +1,8 @@
 (() => {
+  if ((globalThis.Longform && !globalThis.Longform.protocol?.runtimeVersion)
+      || globalThis.window?.__longformContentScriptVersion) {
+    throw Object.assign(new Error('Reload required'), { code: 'reload-required' });
+  }
   globalThis.Longform ||= {};
   const protocolVersion = 6;
   const runtimeVersion = '2026-10-28-managed-v1';
@@ -64,14 +68,12 @@
     brokerMessages: Object.freeze(['BROKER_HELLO', 'CAPTURE_TILE', 'DIGEST_BEGIN', 'DIGEST_CHUNK', 'DIGEST_END']),
     validateEnvelope,
     createEnvelopeValidator,
-    viewportMessage: 'captureViewport',
-    fullPageMessage: 'captureFullPage:v5',
-    contentVersion: '2026-09-09-modular-v1',
     contentFiles: Object.freeze([
       'protocol.js',
       'capture-geometry.js',
       'capture-page.js',
-      'clipboard.js',
+      'capture-session.js',
+      'capture-transfer.js',
       'capture.js',
       'content.js',
     ]),

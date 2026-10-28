@@ -4,7 +4,7 @@
   const { protocolVersion, runtimeVersion } = Longform.protocol;
   const WORK_MS = 120000;
   const RETENTION_MS = 120000;
-  const EXTERNAL_MS = 10000;
+  const EXTERNAL_MS = Longform.protocol.limits.externalMs;
   const workPhases = new Set(['preparing', 'capturing', 'validating', 'restoring', 'encoding']);
   const coded = (code) => Object.assign(new Error(code), { code });
   const safeCode = (code, fallback) => typeof code === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(code) ? code : fallback;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadRuntime, flush } from './helpers/runtime.mjs';
+import { loadRuntime, flush, fakeClock } from './helpers/runtime.mjs';
 
 // A CSSOM boundary double: production reads and writes real declaration values,
 // priorities, and presence. It does not replace any transaction behavior.
@@ -69,6 +69,274 @@ async function setup({ suspendedPaint = false, elements = 2 } = {}) {
     get removes() { return removes; },
   };
 }
+
+async function layoutSetup() {
+  const clock = fakeClock();
+  const records = [];
+  let observer;
+  const rect = { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 };
+  const element = (extra = {}) => ({ style: new Style(), getBoundingClientRect: () => rect, ...extra });
+  const root = element({ scrollWidth: 800, scrollHeight: 600, clientWidth: 800, clientHeight: 600 });
+  const body = element();
+  const elements = [root, body];
+  const listeners = new Map();
+  const mutate = (record) => records.push(record);
+  for (const node of elements) {
+    const set = node.style.setProperty.bind(node.style);
+    node.style.setProperty = (...args) => {
+      set(...args);
+      mutate({ type: 'attributes', target: node, attributeName: 'style' });
+    };
+  }
+  const window = {
+    innerWidth: 800, innerHeight: 600, devicePixelRatio: 1.25, scrollX: 0, scrollY: 0,
+    getComputedStyle: (node) => ({ position: 'static', display: 'block', visibility: 'visible', ...node.computed }),
+    addEventListener() {}, removeEventListener() {},
+    scrollTo({ left, top }) { window.scrollX = left; window.scrollY = top; },
+  };
+  const document = {
+    documentElement: root, scrollingElement: root, body,
+    head: { append(node) { mutate({ type: 'childList', target: this, addedNodes: [node], removedNodes: [] }); } },
+    querySelectorAll: () => elements,
+    createElement: () => ({ textContent: '', remove() {} }),
+    addEventListener(name, callback) { listeners.set(name, callback); },
+    removeEventListener(name) { listeners.delete(name); },
+  };
+  const controller = new AbortController();
+  const ctx = {
+    attempt: 1, signal: controller.signal,
+    checkpoint(attempt = this.attempt) {
+      if (controller.signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+      if (attempt !== this.attempt) throw Object.assign(new Error('stale'), { code: 'stale-attempt' });
+    },
+    external: (operation) => operation(),
+  };
+  const backgrounds = [];
+  const { page } = await loadRuntime(['capture-geometry.js', 'capture-page.js'], {
+    window, document, Date: { now: clock.now },
+    setTimeout(fn, delay) { return clock.schedule(fn, delay); }, clearTimeout(cancel) { cancel?.(); },
+    requestAnimationFrame(fn) { queueMicrotask(fn); },
+    MutationObserver: class {
+      constructor(fn) { this.callback = fn; observer = this; }
+      observe() {} takeRecords() { return records.splice(0); }
+      disconnect() { this.disconnected = true; }
+    },
+    Image: class {
+      complete = false; naturalWidth = 0;
+      constructor() { backgrounds.push(this); }
+    },
+  });
+  const tx = page.beginTransaction(ctx);
+  return { page, tx, ctx, clock, root, body, elements, window, backgrounds, mutate, element, controller,
+    get observer() { return observer; }, listeners };
+}
+
+test('clipped descendant does not enlarge root', async () => {
+  const env = await layoutSetup();
+  env.elements.push(env.element({ getBoundingClientRect: () => ({ left: 0, top: 0, right: 800, bottom: 5000, width: 800, height: 5000 }) }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  assert.equal(observer.measure().pageHeight, 600);
+  assert.equal((await env.page.measure()).pageHeight, 600);
+  observer.dispose();
+});
+
+test('settles after two samples', async () => {
+  const env = await layoutSetup();
+  assert.equal(env.page.sampleDelayMs, 150);
+  assert.equal(env.page.stableSamplesRequired, 2);
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  let result;
+  const pending = observer.settleVisible().then((sample) => { result = sample; });
+  await env.clock.advance(149);
+  assert.equal(result, undefined);
+  await env.clock.advance(1);
+  await pending;
+  assert.equal(result.visibleResourcesReady, true);
+  assert.equal(result.pixelRatio, 1.25);
+  observer.dispose();
+});
+
+test('visible image timeout is not success', async () => {
+  const env = await layoutSetup();
+  env.elements.push(env.element({ tagName: 'IMG', src: 'pending.png', complete: false, naturalWidth: 0 }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const result = assert.rejects(observer.settleVisible(), { code: 'resource-timeout' });
+  await env.clock.advance(10000);
+  await result;
+  observer.dispose();
+});
+
+test('page mutations invalidate generation', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  env.mutate({ type: 'characterData', target: { parentElement: env.body } });
+  assert.ok(observer.sample().generation > before.generation);
+  const generation = observer.sample().generation;
+  env.root.scrollWidth = 1400;
+  env.root.clientWidth = 785;
+  env.window.innerWidth = 785;
+  const changed = observer.sample();
+  assert.equal(changed.pageWidth, 1400);
+  assert.equal(changed.viewportWidth, 785);
+  assert.ok(changed.generation > generation);
+  observer.dispose();
+});
+
+test('extension mutations do not invalidate generation', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  await env.tx.prepare();
+  await env.tx.scrollTo(10.5, 20.25);
+  const after = observer.sample();
+  assert.equal(after.generation, before.generation);
+  assert.equal(after.scrollX, 10.5);
+  assert.equal(after.scrollY, 20.25);
+  observer.dispose();
+  assert.equal(env.observer.disconnected, true);
+});
+
+test('same-size page text adjacent to an owned write is retained', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  env.mutate({ type: 'characterData', target: env.body });
+  const write = env.root.style.setProperty.bind(env.root.style);
+  env.root.style.setProperty = (...args) => {
+    write(...args);
+    env.mutate({ type: 'characterData', target: env.body });
+  };
+  await env.tx.prepare();
+  assert.ok(observer.sample().generation >= before.generation + 2);
+  observer.dispose();
+});
+
+test('a synchronous site style edit on the owned target is retained', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const before = observer.sample();
+  const write = env.root.style.setProperty.bind(env.root.style);
+  env.root.style.setProperty = (...args) => {
+    write(...args);
+    write('color', 'red');
+  };
+  await env.tx.prepare();
+  assert.ok(observer.sample().generation > before.generation);
+  observer.dispose();
+});
+
+test('clipped images and unrelated network traffic do not block settling', async () => {
+  const env = await layoutSetup();
+  const parent = env.element({ computed: { overflow: 'hidden' },
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) });
+  env.elements.push(env.element({ tagName: 'IMG', complete: false, parentElement: parent,
+    getBoundingClientRect: () => ({ left: 0, top: 200, right: 100, bottom: 300, width: 100, height: 100 }) }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  const pending = observer.settleVisible();
+  env.listeners.get('load')({ target: { tagName: 'SCRIPT' } });
+  await env.clock.advance(150);
+  assert.equal((await pending).visibleResourcesReady, true);
+  observer.dispose();
+});
+
+test('unreadable resources fail with a safe specific code', async () => {
+  const env = await layoutSetup();
+  env.body.getBoundingClientRect = () => { throw new Error('private URL'); };
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  await assert.rejects(observer.settleVisible(), { code: 'resource-unreadable', message: 'resource-unreadable' });
+  observer.dispose();
+});
+
+test('cancelled decode continuations do not start resource work', async () => {
+  const env = await layoutSetup();
+  let decodes = 0;
+  env.elements.push(env.element({ tagName: 'IMG', src: 'ready.png', complete: true, naturalWidth: 10,
+    decode() { decodes++; return Promise.resolve(); } }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  observer.sample();
+  env.controller.abort();
+  await flush();
+  assert.equal(decodes, 0);
+  observer.dispose();
+});
+
+test('continuous same-size text mutations hit the layout bound', async () => {
+  const env = await layoutSetup();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  let active = true;
+  const change = () => {
+    if (!active) return;
+    env.mutate({ type: 'characterData', target: env.body });
+    env.clock.schedule(change, 50);
+  };
+  env.clock.schedule(change, 50);
+  const result = assert.rejects(observer.settleVisible(), { code: 'layout-unstable' });
+  await env.clock.advance(10000);
+  await result;
+  active = false;
+  observer.dispose();
+});
+
+test('broken images and failed decode are resource failures', async () => {
+  for (const image of [
+    { complete: true, naturalWidth: 0 },
+    { complete: true, naturalWidth: 20, decode: () => Promise.reject(new Error('private URL')) },
+  ]) {
+    const env = await layoutSetup();
+    env.elements.push(env.element({ tagName: 'IMG', src: 'broken.png', ...image }));
+    const observer = env.page.observeLayout(env.tx, env.ctx);
+    const result = assert.rejects(observer.settleVisible(), { code: 'resource-failed' });
+    await env.clock.advance(300);
+    await result;
+    observer.dispose();
+  }
+});
+
+test('computed backgrounds settle while offscreen images do not block', async () => {
+  const env = await layoutSetup();
+  env.body.computed = { backgroundImage: 'url("background.png")' };
+  env.elements.push(env.element({ tagName: 'IMG', complete: false,
+    getBoundingClientRect: () => ({ left: 0, top: 700, right: 100, bottom: 800, width: 100, height: 100 }) }));
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  let settled = false;
+  const pending = observer.settleVisible().then(() => { settled = true; });
+  await env.clock.advance(150);
+  assert.equal(settled, false);
+  assert.equal(env.backgrounds.length, 1);
+  env.backgrounds[0].complete = true;
+  env.backgrounds[0].naturalWidth = 200;
+  await env.clock.advance(300);
+  await pending;
+  assert.equal(settled, true);
+  observer.dispose();
+});
+
+test('retry reuses original transaction and fences old scroll continuations', async () => {
+  const env = await setup({ suspendedPaint: true });
+  env.ctx.checkpoint = (attempt = env.ctx.attempt) => {
+    if (attempt !== env.ctx.attempt) throw Object.assign(new Error('stale'), { code: 'stale-attempt' });
+  };
+  const tx = env.page.beginTransaction(env.ctx);
+  const first = tx.prepare();
+  env.resumePaint(); await flush(); env.resumePaint(); await first;
+  const oldScroll = tx.scrollTo(100, 200);
+  const rejected = assert.rejects(oldScroll, { code: 'stale-attempt' });
+  env.sticky[0].style.setProperty('visibility', 'visible', 'important');
+  const lateFixed = { style: new Style(), position: 'fixed' };
+  env.sticky.push(lateFixed);
+  env.ctx.attempt = 2;
+  const preparing = tx.prepare();
+  env.resumePaint(); await flush(); env.resumePaint(); await preparing;
+  await rejected;
+  assert.equal(env.nodes.length, 1);
+  assert.equal(lateFixed.style.visibility, 'hidden');
+  assert.equal(env.sticky[0].style.visibility, 'visible');
+  assert.equal((await tx.restore()).ok, true);
+  assert.equal(lateFixed.style.visibility, '');
+  assert.equal(env.sticky[0].style.visibility, 'visible');
+  assert.deepEqual([env.window.scrollX, env.window.scrollY], [17.5, 96.25]);
+});
 
 test('partial preparation unwinds', async () => {
   const env = await setup();

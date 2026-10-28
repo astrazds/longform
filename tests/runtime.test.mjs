@@ -2,15 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
-
-async function loadRuntime(files, globals = {}) {
-  const context = vm.createContext({ Blob, Uint8Array, atob, btoa, ...globals });
-  context.globalThis = context;
-  for (const file of ['protocol.js', ...files]) {
-    vm.runInContext(await readFile(new URL(`../${file}`, import.meta.url), 'utf8'), context, { filename: file });
-  }
-  return context.Longform;
-}
+import { loadRuntime } from './helpers/runtime.mjs';
 
 const { geometry } = await loadRuntime(['capture-geometry.js']);
 

@@ -9,6 +9,7 @@ export const contentFiles = [
 
 export const extensionFiles = [
   ...contentFiles,
+  'capture-session.js',
   'background.js',
   'manifest.json',
   'popup.css',

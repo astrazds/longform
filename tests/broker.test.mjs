@@ -128,6 +128,27 @@ test('browser and content document identities are distinct and hello does not re
   await assert.rejects(f.broker.capture(stale, sender()), code('target-changed'));
   assert.equal((await f.broker.capture(f.request(replacement, { documentId: 'new-content-document' }), replacement)).tileIndex, 0);
 });
+test('more than 64 sequential capture sessions preserve old tile replay fences', async () => {
+  const f = await setup();
+  const first = f.request(sender(), { sessionId: 'session-0' });
+  for (let index = 0; index < 80; index++) {
+    const result = await f.broker.capture(f.request(sender(), { sessionId: `session-${index}` }), sender());
+    assert.equal(result.tileIndex, 0);
+  }
+  await assert.rejects(f.broker.capture(first, sender()), code('invalid-request'));
+});
+test('navigation clears document session metadata while activation retains replay fences', async () => {
+  const f = await setup(); const request = f.request();
+  await f.broker.capture(request, sender());
+  f.broker.invalidate({ windowId: 10 });
+  await assert.rejects(f.broker.capture(request, sender()), code('invalid-request'));
+  const next = { ...request, requestId: 'next', tileIndex: 1 };
+  f.broker.invalidate({ tabId: 1 });
+  await assert.rejects(f.broker.capture(next, sender()), code('target-changed'));
+  // A fresh HELLO re-establishes a document after navigation/removal invalidation.
+  f.broker.hello(sender());
+  assert.equal((await f.broker.capture(request, sender())).tileIndex, 0);
+});
 test('capture timeout fences late bytes and never overlaps pending native call', async () => {
   const clock = fakeClock(); const pending = deferred(); let calls = 0;
   const f = await setup(() => { calls++; return pending.promise; }, {

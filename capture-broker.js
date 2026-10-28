@@ -53,6 +53,11 @@
           record.epoch++;
           // Activation invalidates in-flight work without forgetting tile counters.
           for (const entry of digests) if (entry.record === record) expire(entry);
+          // Navigation, removal and detachment end this browser document binding.
+          if (tabId !== undefined && id === tabId) {
+            record.sessions.clear();
+            documents.delete(id);
+          }
         }
       }
     }
@@ -62,6 +67,7 @@
       if (!previous || previous.browserDocumentId !== sender.documentId || previous.windowId !== sender.tab.windowId) {
         if (previous) {
           previous.epoch++;
+          previous.sessions.clear();
           for (const entry of digests) if (entry.record === previous) expire(entry);
         }
         // At most one document per tab; stale bound records fail object identity fences.
@@ -81,7 +87,7 @@
       record.contentDocumentId = request.documentId;
       let session = record.sessions.get(request.sessionId);
       if (!session) {
-        if (record.sessions.size >= 64) throw fail('memory-limit');
+        // Keep lightweight replay metadata for this browser document's lifetime.
         session = { nextTile: 0, busy: false };
         record.sessions.set(request.sessionId, session);
       }

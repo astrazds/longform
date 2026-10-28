@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Longform reliability interruption</title>
+<style>
+  html { scroll-behavior: smooth; scroll-snap-type: y mandatory; }
+  body { margin: 0; background: rgb(24, 164, 96); }
+  main { height: 1800px; }
+  #fixed { position: fixed; top: 0; width: 30px; height: 30px; background: red; }
+  #animated { width: 10px; height: 10px; animation: pulse 1s infinite; }
+  @keyframes pulse { to { opacity: .2; } }
+</style>
+<main></main><div id="fixed" style="visibility: visible !important"></div><div id="animated"></div>
+<script>
+  window.lifecycle = [];
+  addEventListener('pagehide', (event) => lifecycle.push({ type: 'pagehide', persisted: event.persisted }));
+  addEventListener('pageshow', (event) => lifecycle.push({ type: 'pageshow', persisted: event.persisted }));
+</script>

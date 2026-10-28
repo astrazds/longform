@@ -44,21 +44,34 @@ Longform if you want its icon to stay in the toolbar.
 - Choose **Copy** to put the PNG on your clipboard, then paste it into an app
   that accepts images.
 
-Keep the popup open until it says **Download started.** or **Copied.** Both buttons are
-disabled during capture. The page returns to its original scroll position
-when capture finishes or fails. If copying fails, the popup explains how to
-retry or save the screenshot instead.
+The popup reports progress and offers Cancel until delivery commits. Both
+actions stay disabled while capture is running. The page returns to its original
+scroll position after cleanup. **Download started.** means the browser accepted
+the download handoff; **Copied.** means the clipboard write succeeded.
+
+If you close the popup, reopen it to see progress. A finished capture stays in
+document memory for two minutes: choose Save or Copy to deliver it without
+recapturing. After expiry, navigation, tab closure or a browser crash, start a new
+capture. There is no saved screenshot history. If delivery is reported as
+unknown, it may already have completed; Longform never silently repeats it.
 
 ## Limits
 
 - Longform captures regular `http://` and `https://` pages. Browser settings,
   extension pages, and other restricted pages cannot be captured.
+- Capture follows a finite root document, including horizontal overflow. It
+  does not traverse nested scrollers, virtualized lists, infinite feeds or iframe
+  interiors.
 - Fixed and sticky elements are temporarily hidden during capture to avoid
   repeating them in the PNG. They are restored afterward.
 - Very large pages can exceed the image-size limits. Longform reports a
   failure if the page is too large or it detects incomplete scroll coverage.
+- Capture allows one retry for a changed page, with 120 seconds of active work
+  and a 10-second limit per external operation. Scrolling, switching tabs or a
+  stalled resource can interrupt capture. CSS animations pause temporarily;
+  video, canvas and page scripts can keep changing.
 - Copy requires browser support for PNG clipboard writes. Large images can
-  also exceed extension-message or clipboard limits. Use **Save** when Copy
+  also exceed image or clipboard limits. Use **Save** when Copy
   is unavailable.
 
 ## Privacy

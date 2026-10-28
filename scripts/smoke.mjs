@@ -1,6 +1,7 @@
 import { contentFiles, extensionFiles, iconFiles } from './extension-files.mjs';
 import assert from 'node:assert/strict';
 import { runPopupChecks } from './popup-checks.mjs';
+import { reliabilityWorldScript, runReliabilityChecks } from './reliability-checks.mjs';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { accessSync, constants, createReadStream } from 'node:fs';
@@ -25,6 +26,9 @@ const artifactsDir = path.join(repoRoot, 'artifacts', 'smoke');
 const downloadsDir = path.join(artifactsDir, 'downloads');
 const reportPath = path.join(artifactsDir, 'longform-smoke.json');
 const releaseReportPath = path.join(artifactsDir, 'longform-release-smoke.json');
+if (process.env.LONGFORM_RELIABILITY_CASE && !process.argv.some((arg) => ['--reliability', '--popup-reliability'].includes(arg))) {
+  throw new Error('LONGFORM_RELIABILITY_CASE is for focused reliability runs only; unset it for the full gate.');
+}
 const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -40,6 +44,7 @@ const targetUrl = params.get('targetUrl') || '';
 const filename = params.get('filename') || 'longform-capture-smoke.png';
 const setState = (patch) => { window.__longformSmoke = { ...(window.__longformSmoke || {}), ...patch, at: new Date().toISOString() }; };
 (async () => {
+  const started = performance.now();
   setState({ status: 'booting', targetUrl });
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((candidate) => candidate.url === targetUrl);
@@ -58,10 +63,19 @@ const setState = (patch) => { window.__longformSmoke = { ...(window.__longformSm
     if (['ready-to-deliver','failed','expired','cancelled'].includes(client.snapshot().phase)) unsubscribe();
   });
   const { blob, transferId } = await client.artifact();
+  const [memory] = await chrome.scripting.executeScript({ target: { tabId: tab.id },
+    args: [blob.size], func: (pngBytes) => {
+      const metrics = Longform.page.measure();
+      const canvas = Longform.geometry.getCanvasSize(metrics);
+      const canvasPixels = canvas.width * canvas.height;
+      const tilePixels = Math.ceil(metrics.viewportWidth * metrics.pixelRatio) * Math.ceil(metrics.viewportHeight * metrics.pixelRatio);
+      return { captureWorkingBytes: Longform.capture.estimateWorkingBytes({ canvasPixels, tilePixels, pngBytes }),
+        transferWorkingBytes: Longform.transfer.estimateWorkingBytes(pngBytes, canvasPixels), canvasPixels, tilePixels, pngBytes };
+    } });
   await client.commit(transferId);
   Longform.delivery.save(blob, filename);
   await client.result(transferId, 'success');
-  setState({ artifact: { byteSize: blob.size, delivery: 'download' }, filename, status: 'success', success: true, targetTabId: tab.id, targetWindowId: tab.windowId });
+  setState({ durationMs: Math.round(performance.now() - started), estimatedMemory: memory.result, artifact: { byteSize: blob.size, delivery: 'download' }, filename, status: 'success', success: true, targetTabId: tab.id, targetWindowId: tab.windowId });
   client.disconnect();
 })().catch((error) => setState({ error: error.message || 'Smoke capture failed', errorCode: error.code, status: 'error', success: false }));
 `;
@@ -137,6 +151,7 @@ async function buildSmokeExtensionBundle(sourceDir) {
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await writeFile(path.join(extensionDir, 'smoke.html'), smokeHarnessHtml);
   await writeFile(path.join(extensionDir, 'smoke.js'), smokeHarnessScript);
+  await writeFile(path.join(extensionDir, 'reliability-world.js'), reliabilityWorldScript);
 
   return extensionDir;
 }
@@ -194,16 +209,43 @@ async function writeReport(payload, targetPath = reportPath) {
   await writeFile(targetPath, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
+async function compareBaseline(captureResults) {
+  if (!captureResults.length) return null;
+  let baseline;
+  try { baseline = JSON.parse(await readFile(path.join(repoRoot, 'artifacts/baseline/chrome-baseline.json'), 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return { available: false, reason: 'Supply the preserved baseline report at artifacts/baseline/chrome-baseline.json for a local comparison.' }; throw error; }
+  return { available: true,
+    method: 'Load-to-success wall time; same conservative current memory model applied to baseline dimensions/PNG bytes. Estimates are not browser RSS measurements.',
+    tradeoff: 'The new path adds finite-content preparation with two stable samples 150ms apart, exact coverage validation, restoration before encoding, and verified chunk transfer. Most fixtures take longer because of that work. Both paths include browser scheduling and cold-start variation; single-run speedups cannot be attributed to one mechanism. Estimates compare output geometry under the same current model, not historical browser RSS.',
+    fixtures: captureResults.map((current) => {
+      const previous = baseline.captureResults.find((result) => result.label === current.label);
+      assert.ok(previous, `Baseline contains ${current.label}`);
+      const elapsed = (report, label) => Date.parse(report.checkpoints.find((event) => event.name === `${label}.capture.succeeded`).at)
+        - Date.parse(report.checkpoints.find((event) => event.name === `${label}.loaded`).at);
+      const baselineDurationMs = elapsed(baseline, current.label);
+      const durationMs = Date.parse(checkpoints.find((event) => event.name === `${current.label}.capture.succeeded`).at)
+        - Date.parse(checkpoints.find((event) => event.name === `${current.label}.loaded`).at);
+      const diagnostics = previous.smokeResult.captureDiagnostics;
+      const canvasPixels = diagnostics.canvas.width * diagnostics.canvas.height;
+      const tilePixels = Math.ceil(diagnostics.metrics.viewportWidth * diagnostics.metrics.pixelRatio)
+        * Math.ceil(diagnostics.metrics.viewportHeight * diagnostics.metrics.pixelRatio);
+      const pngBytes = previous.smokeResult.artifact.byteSize;
+      const baselineEstimatedCaptureBytes = 12 * canvasPixels + 8 * tilePixels + 8 * pngBytes + 16 * 1024 * 1024;
+      return { label: current.label, baselineDurationMs, durationMs, durationRatio: Number((durationMs / baselineDurationMs).toFixed(3)),
+        baselineEstimatedCaptureBytes, estimatedMemory: current.smokeResult.estimatedMemory };
+    }) };
+}
+
 const checkpoints = [];
 const harnessDiagnostics = [];
 
-async function inspectCapture(browserContext, pngPath, { checkRightEdge = false } = {}) {
+async function inspectCapture(browserContext, pngPath, { checkRightEdge = false, pixelRegions = [] } = {}) {
   const data = await readFile(pngPath);
   const dataUrl = `data:image/png;base64,${data.toString('base64')}`;
   const page = await browserContext.newPage();
 
   try {
-    return await page.evaluate(async ({ source, checkRightEdge: shouldCheckRightEdge }) => {
+    return await page.evaluate(async ({ source, checkRightEdge: shouldCheckRightEdge, pixelRegions }) => {
       const image = new Image();
       image.src = source;
       await image.decode();
@@ -268,8 +310,17 @@ async function inspectCapture(browserContext, pngPath, { checkRightEdge = false 
         markerPixels,
         markerRatio: sampledPixels ? markerPixels / sampledPixels : 0,
         rightEdgeRatio,
+        pixelRegions: pixelRegions.map((region) => {
+          const left = Math.max(0, Math.floor(region.left)); const top = Math.max(0, Math.floor(region.top));
+          const width = Math.min(canvas.width - left, Math.ceil(region.width));
+          const height = Math.min(canvas.height - top, Math.ceil(region.height));
+          const pixels = context.getImageData(left, top, width, height).data;
+          let matchingPixels = 0;
+          for (let i = 0; i < pixels.length; i += 4) if (region.color.every((channel, index) => Math.abs(channel - pixels[i + index]) <= 8)) matchingPixels++;
+          return { ...region, matchingPixels };
+        }),
       };
-    }, { source: dataUrl, checkRightEdge });
+    }, { source: dataUrl, checkRightEdge, pixelRegions });
   } finally {
     await page.close();
   }
@@ -305,6 +356,11 @@ async function runCaptureTarget({
             top: markerRect.top + window.scrollY,
           }
         : null,
+      pixelRegions: [...document.querySelectorAll('h1, h2')].map((element) => {
+        const rect = element.getBoundingClientRect();
+        const color = getComputedStyle(element).color.match(/[\d.]+/g).slice(0, 3).map(Number);
+        return { left: rect.left + scrollX, top: rect.top + scrollY, width: rect.width, height: rect.height, color };
+      }),
     };
   });
 
@@ -374,7 +430,7 @@ async function runCaptureTarget({
   await download.saveAs(artifactCopyPath);
   const downloadedPngInfo = await stat(artifactCopyPath);
 
-  const footerMarker = await inspectCapture(browserContext, artifactCopyPath, { checkRightEdge });
+  const footerMarker = await inspectCapture(browserContext, artifactCopyPath, { checkRightEdge, pixelRegions: pageMetrics.pixelRegions });
   const pngDimensions = {
     height: footerMarker.height,
     width: footerMarker.width,
@@ -387,6 +443,8 @@ async function runCaptureTarget({
   if (checkRightEdge && footerMarker.rightEdgeRatio < 0.9) {
     throw new Error(`Scrollbar edge was visible in ${label} capture`);
   }
+  for (const region of footerMarker.pixelRegions) assert.ok(region.matchingPixels >= 10,
+    `${label} contains expected text-color pixels in interior region at ${region.top}`);
 
   recordCheckpoint(checkpoints, `${label}.artifact.saved`, {
     artifactPath: artifactCopyPath,
@@ -541,6 +599,9 @@ try {
     acceptDownloads: true,
     downloadsPath: downloadsDir,
     viewport: { width: 1280, height: 720 },
+    // Playwright disables BFCache by default. Reliability tests must observe
+    // the browser's genuine history lifecycle rather than force a reload.
+    ignoreDefaultArgs: ['--disable-back-forward-cache'],
     args: [
       `--disable-extensions-except=${smokeExtensionDir}`,
       `--load-extension=${smokeExtensionDir}`,
@@ -587,7 +648,7 @@ try {
   ];
   const captureResults = [];
 
-  for (const [label, route] of process.argv.includes('--popup') ? [] : captureTargets) {
+  for (const [label, route] of process.argv.some((arg) => ['--popup', '--reliability', '--popup-reliability'].includes(arg)) ? [] : captureTargets) {
     captureResults.push(await runCaptureTarget({
       baseUrl,
       browserContext,
@@ -599,7 +660,9 @@ try {
     }));
   }
 
-  const popupChecks = await runPopupChecks({ browserContext, serviceWorker, baseUrl, userDataDir, artifactsDir });
+  const popupChecks = process.argv.some((arg) => ['--reliability', '--fixtures'].includes(arg)) ? [] : await runPopupChecks({ browserContext, serviceWorker, baseUrl, userDataDir, artifactsDir });
+  const reliabilityChecks = process.argv.some((arg) => ['--popup', '--fixtures'].includes(arg)) ? null : await runReliabilityChecks({ browserContext, serviceWorker, baseUrl, artifactsDir });
+  const performanceComparison = await compareBaseline(captureResults);
 
   const report = {
     ok: true,
@@ -607,6 +670,9 @@ try {
     smokeExtensionPath: smokeExtensionDir,
     captureResults,
     popupChecks,
+    reliabilityChecks,
+    performanceComparison,
+    manualAcceptance: { productionToolbar: 'unverified by this harness in Chrome and Edge', screenReaderSpeech: 'manual check required', releaseReady: false },
     extensionPath: repoRoot,
     artifactPath: captureResults[0]?.artifactPath,
     reportPath,

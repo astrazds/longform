@@ -254,7 +254,8 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
   let popup = cancelConnection.contexts()[0].pages().find((page) => page.url().endsWith('/popup.html'));
   await popup.waitForFunction(() => !document.getElementById('screenshotBtn').disabled);
   await popup.locator('#screenshotBtn').click();
-  await popup.locator('#cancelBtn').click();
+  await popup.locator('#cancelBtn').focus();
+  await popup.keyboard.press('Enter');
   await popup.waitForFunction(() => document.getElementById('status').textContent === 'Cancelled.').catch(async (error) => { throw new Error(`${error.message}; cancel state: ${await popup.locator('body').innerText()}`); });
   assert.equal(await popup.locator('#cancelBtn').isHidden(), true);
   assert.equal(await popup.locator('#screenshotBtn').evaluate((button) => document.activeElement === button), true);
@@ -293,6 +294,14 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
   await serviceWorker.evaluate(() => { chrome.tabs.captureVisibleTab = globalThis.recoveryCapture; delete globalThis.recoveryCapture; });
   results.push({ destination: 'reopen', sameSession: true, restored: true, recaptured: false });
   await popup.close(); await reopenedConnection.close();
+  // Secondary CDP connections install their own download behavior. Restore the
+  // persistent context's GUID directory before later reliability downloads.
+  const downloadsSession = await browserContext.browser().newBrowserCDPSession();
+  await downloadsSession.send('Browser.setDownloadBehavior', {
+    behavior: 'allowAndName', downloadPath: path.join(artifactsDir, 'downloads'), eventsEnabled: true,
+  });
+  // Keep this browser session alive until the persistent context closes.
+  // Detaching a Browser download handler resets the browser-wide behavior.
   await target.close();
   return results;
 }

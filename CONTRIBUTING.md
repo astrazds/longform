@@ -37,8 +37,8 @@ The tasks support narrower checks during development.
 | Task | What it checks |
 | --- | --- |
 | `mise run test:unit` | Geometry, PNG payloads, clipboard timing, and content-listener reinjection |
-| `mise run test:popup` | Real toolbar actions, PNG delivery, failure recovery, page restoration, and popup accessibility states |
-| `mise run test:browser` | Eight capture fixtures plus the toolbar checks |
+| `mise run test:popup` | Actual popup document under test host grants: PNG delivery, recovery, restoration and accessibility states |
+| `mise run test:browser` | Eight capture fixtures, popup checks and adverse reliability scenarios |
 | `mise run test:release` | Package contents and the packaged popup on a restricted page |
 | `mise run check` | Unit, browser, and release checks in sequence |
 
@@ -52,6 +52,41 @@ Browser and popup runs replace the previous smoke artifacts. The automated
 browser copy adds test permissions, so also check the toolbar with the normal manifest after
 changes to permissions or activation. See the
 [architecture guide](docs/architecture.md#verification) for that boundary.
+
+For focused adverse-case diagnosis use `node scripts/smoke.mjs --reliability`.
+The optional `LONGFORM_RELIABILITY_CASE` regex selects scenarios during iteration;
+unset it before the full check. The harness runs real isolated-world modules,
+real PNGs, local hostile/resource fixtures, a native worker stop and persisted
+BFCache restoration. Its hooks and widened permissions exist only in the
+temporary test bundle. Preserve a baseline report outside `artifacts/smoke/` at
+`artifacts/baseline/chrome-baseline.json` to record all eight fixture durations
+and conservative memory comparisons. These estimates are not measured browser RSS.
+
+On Windows set `CHROMIUM_EXECUTABLE` to a working Chrome/Chromium executable
+when the Playwright cache is unavailable. Put working `zip` and `unzip` tools on
+the process `PATH`. A missing browser or archive tool is a setup failure, not a
+reason to skip a release check. The release check compares every ZIP entry and
+byte with the shared runtime allowlist and loads the unchanged production manifest.
+
+## Manual release acceptance
+
+In disposable profiles in both Chrome and Edge, load the extension with the
+unchanged manifest and invoke its real toolbar/Extensions-menu action. Record
+browser and OS versions, permission state and each outcome in ignored artifacts:
+
+- Save and Copy on an ordinary page; inspect the PNG and clipboard output.
+- Cancel and keyboard focus after cleanup; reopen during capture and recover a
+  finished PNG without recapturing.
+- A blocked browser page and a hostile page listening for screenshot URLs and
+  cancelling page download links.
+- Confirm only `activeTab`, `scripting`, `clipboardWrite`; no test host grants.
+- With a screen reader, check phase announcements and section throttling, then
+  check keyboard access, visible focus, themes and reduced motion.
+
+An automated `chrome.action.openPopup()` call does not prove the user toolbar
+gesture grant. Missing Chrome execution is an outstanding acceptance check even
+if Edge passes. Do not declare release readiness until these manual outcomes
+are recorded; programmatic accessibility attributes do not substitute for speech.
 
 For landing-page changes, inspect `index.html` and `privacy.html` in Chromium
 at mobile and desktop widths in light and dark mode. Check keyboard focus,

@@ -26,6 +26,23 @@ disabled until the operation finishes. Their accessible names include
 "full-page screenshot as PNG". Keyboard focus uses an opaque outline, and
 reduced-motion preferences remove button transitions.
 
+During managed capture, the status names preparation, sections, validation,
+restoration, encoding and transfer. A native progress element has counts only
+when sections are known; completion waits for validation and cleanup. Section
+announcements are throttled to at most once per second. Preparation and encoding
+remain indeterminate.
+
+Cancel is keyboard reachable and at least 44px high. It disables during cleanup
+and disappears after cancellation or delivery commit; focus returns to an
+available action. Reopening an in-progress capture reconnects to the same
+session. A retained result says “Capture ready. Choose Save or Copy.” Delivery
+feedback is exactly **Download started.** or **Copied.** Unknown delivery is an
+error with an explicit retry choice, never a success or cancellation claim.
+
+The automated checks verify live-region attributes and announcement timing,
+keyboard focus, themes and reduced motion. A screen reader must still be used
+to assess actual speech before release.
+
 ## Landing page
 
 [index.html](../index.html) uses one centered column. The sequence is the
@@ -60,6 +77,7 @@ high. Check the privacy page when changing shared landing styles.
 Current reference images live in [docs/screenshots](screenshots/):
 
 - [Popup](screenshots/popup.png).
+- [Capture progress and Cancel](screenshots/popup-progress.png).
 - [Desktop landing page](screenshots/landing-desktop.png).
 - [Mobile landing page in dark mode](screenshots/landing-mobile-dark.png).
 

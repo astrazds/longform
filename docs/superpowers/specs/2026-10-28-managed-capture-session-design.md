@@ -2,7 +2,7 @@
 
 Date: 2026-10-28
 
-Status: Draft for approval; approach selected, detailed design not yet approved.
+Status: Approved by the user on 2026-10-28; implementation plan requested.
 
 Reviewed baseline: `3e9ee0269d71ba3b86d7f58c60cc604c94ada6b2`.
 
@@ -14,7 +14,7 @@ Save and Copy actions. Add progress and Cancel while capturing.
 
 The user selected a managed capture session after considering the alternatives
 below. This document specifies the proposed behavior and technical boundaries;
-it does not authorize implementation. This is a contained project spanning
+implementation will follow review of the implementation plan. This is a contained project spanning
 capture, messaging, delivery, UI, and regression coverage.
 
 ## Approaches
@@ -70,7 +70,7 @@ Preparation and encoding are indeterminate. Progress never reaches completion
 before validation and cleanup. Cancel is keyboard reachable with a 44px target;
 restore sensible focus when it disappears. Preserve reduced-motion behavior.
 
-### Proposed details for approval
+### Approved recovery behavior
 
 Closing the popup does not itself cancel capture. Capture continues only while
 the target document stays active and within its deadline. Reopening reconnects;
@@ -181,7 +181,7 @@ settle at each position; do not require global network idle. Check cancellation
 between steps. A timed-out resource or continuously growing page produces a clear
 failure rather than a successful image of placeholders.
 
-Proposed starting limits: 120 seconds total, 10 seconds for any external operation,
+Starting limits: 120 seconds total, 10 seconds for any external operation,
 two consecutive stable layout samples 150ms apart, and at most one complete retry.
 The builder may tune sample timing using fixtures; increasing total/retry budgets
 is a product change. Resource and total deadlines also cover preparation and transfer.

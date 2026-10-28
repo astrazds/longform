@@ -233,7 +233,7 @@ async function compareBaseline(captureResults) {
         * Math.ceil(diagnostics.metrics.viewportHeight * diagnostics.metrics.pixelRatio);
       const raw = canvasPixels * 4 + diagnostics.canvas.height;
       const pngReserveBytes = raw + Math.ceil(raw / 16383) * 5 + Math.ceil(raw / 32768) * 12 + 1024;
-      const baselineEstimatedCaptureBytes = 12 * canvasPixels + Math.max(32 * tilePixels, 2 * pngReserveBytes) + 16 * 1024 * 1024;
+      const baselineEstimatedCaptureBytes = Math.max(8 * canvasPixels + 32 * tilePixels, 12 * canvasPixels + 2 * pngReserveBytes) + 16 * 1024 * 1024;
       return { label: current.label, baselineDurationMs, durationMs, durationRatio: Number((durationMs / baselineDurationMs).toFixed(3)),
         baselineEstimatedCaptureBytes, estimatedMemory: current.smokeResult.estimatedMemory };
     }) };

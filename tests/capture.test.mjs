@@ -257,6 +257,19 @@ test('normal full-size HiDPI page captures at native resolution within the phase
   env.owner.dispose();
 });
 
+test('4K-width maximized and fullscreen HiDPI pages capture at native resolution', async (t) => {
+  for (const viewportHeight of [1392, 1440]) await t.test(`2560x${viewportHeight}@1.5`, async () => {
+    const env = await setup({ width: 2560, height: 4200, viewportWidth: 2560, viewportHeight, pixelRatio: 1.5 });
+    const { sessionId } = env.start(); await flush();
+    assert.equal(env.owner.snapshot().phase, 'ready-to-deliver');
+    assert.deepEqual(env.stats.encodedSizes, [[3840, 6300]]);
+    assert.equal(await env.owner.artifact(sessionId).text(), '1');
+    assert.equal(env.stats.restores, 1);
+    assert.ok(env.stats.canvases.every((canvas) => canvas.width === 0 && canvas.height === 0));
+    env.owner.dispose();
+  });
+});
+
 test('genuinely over-budget HiDPI page rejects before allocation and restores', async () => {
   const env = await setup({ width: 5000, height: 5000, viewportWidth: 1621, viewportHeight: 1378, pixelRatio: 1.5 });
   const { sessionId } = env.start(); await flush();
@@ -270,7 +283,7 @@ test('genuinely over-budget HiDPI page rejects before allocation and restores', 
 test('worst-case encoder and native tile peaks independently reject before allocation', async (t) => {
   for (const [phase, dimensions] of [
     ['encoder', { width: 3000, height: 9000, viewportWidth: 3000, viewportHeight: 1000 }],
-    ['tile', { width: 3500, height: 3500, viewportWidth: 3500, viewportHeight: 3500 }],
+    ['tile', { width: 3700, height: 3700, viewportWidth: 3700, viewportHeight: 3700 }],
   ]) await t.test(phase, async () => {
     const env = await setup(dimensions);
     const { sessionId } = env.start(); await flush();

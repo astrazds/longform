@@ -88,11 +88,14 @@ oversized captures. Estimates include canvas, native bitmap, PNG and transport
 copies; they do not measure or guarantee browser RSS.
 
 Capture uses the larger of its capture and encoding phase estimates:
-`12*canvasPixels + max(32*tilePixels, 2*pngReserveBytes) + 16MiB`. The canvas
-allowance includes native copies; the tile allowance covers two UTF-16 base64
-screenshot strings, a tile PNG Blob and decoded bitmap. All tiles close before
-encoding; PNG reservation includes uncompressed RGBA, row filters and conservative
-stored-deflate/chunk/header overhead without assuming compression. The actual
+`max(8*canvasPixels + 32*tilePixels, 12*canvasPixels + 2*pngReserveBytes) + 16MiB`.
+Capture reserves a disconnected RGBA destination plus one native copy. Encoding
+also reserves full-frame snapshot/readback/conversion headroom created by
+`toBlob`; no destination export/readback runs while drawing tiles. The tile
+allowance covers two UTF-16 base64 screenshot strings, a tile PNG Blob and decoded
+bitmap. All tiles close before encoding; PNG reservation includes uncompressed
+RGBA, row filters and conservative stored-deflate/chunk/header overhead without
+assuming compression. The actual
 encoded Blob must still fit 32MiB. Transfer has its own estimate after the runner
 releases its canvas, so worker/popup copies do not overlap capture in this model.
 If Cancel or timeout leaves native tile fetch/Blob/decode or encoding pending, a

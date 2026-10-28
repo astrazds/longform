@@ -217,27 +217,32 @@ export async function runReliabilityChecks({ browserContext, serviceWorker, base
     });
   }
 
-  await scenario('hidpi-normal-window-full-resolution-save', async () => {
+  for (const [name, viewportWidth, viewportHeight, outputWidth] of [
+    ['normal-window', 1621, 1378, 2432],
+    ['maximized-4k', 2560, 1392, 3840],
+    ['fullscreen-4k', 2560, 1440, 3840],
+  ]) await scenario(`hidpi-${name}-full-resolution-save`, async () => {
     const test = await setup('dark-footer.html');
     const cdp = await browserContext.newCDPSession(test.target);
     try {
-      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1621, height: 1378, deviceScaleFactor: 1.5, mobile: false });
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: viewportWidth, height: viewportHeight, deviceScaleFactor: 1.5, mobile: false });
       const metrics = await test.target.evaluate(() => ({ width: innerWidth, height: innerHeight, ratio: devicePixelRatio,
         pageHeight: document.scrollingElement.scrollHeight,
         marker: (() => { const rect = document.querySelector('[data-longform-end-marker]').getBoundingClientRect();
           return { left: rect.left, top: rect.top + scrollY, right: rect.right, bottom: rect.bottom + scrollY }; })() }));
-      assert.deepEqual([metrics.width, metrics.height, metrics.ratio, metrics.pageHeight], [1621, 1378, 1.5, 4200]);
+      assert.deepEqual([metrics.width, metrics.height, metrics.ratio, metrics.pageHeight], [viewportWidth, viewportHeight, 1.5, 4200]);
       await test.start(); const state = await test.wait();
-      assert.equal(state.phase, 'ready-to-deliver'); await restored(test);
+      assert.equal(state.phase, 'ready-to-deliver', JSON.stringify(state)); await restored(test);
       const download = test.clientPage.waitForEvent('download');
-      const artifactBytes = await test.clientPage.evaluate(async () => {
+      const filename = `reliability-hidpi-dark-footer-${name}.png`;
+      const artifactBytes = await test.clientPage.evaluate(async (filename) => {
         const { blob, transferId } = await reliabilityClient.artifact();
         await reliabilityClient.commit(transferId);
-        Longform.delivery.save(blob, 'reliability-hidpi-dark-footer.png');
+        Longform.delivery.save(blob, filename);
         await reliabilityClient.result(transferId, 'success');
         return blob.size;
-      });
-      const saved = path.join(artifactsDir, 'reliability-hidpi-dark-footer.png');
+      }, filename);
+      const saved = path.join(artifactsDir, filename);
       await (await download).saveAs(saved);
       const bytes = await readFile(saved);
       assert.equal(bytes.length, artifactBytes);
@@ -259,7 +264,7 @@ export async function runReliabilityChecks({ browserContext, serviceWorker, base
         }
         return { width: canvas.width, height: canvas.height, transparentPixels, missingBackgroundPixels, missingFooterPixels };
       }, { bytes: [...bytes], marker: metrics.marker });
-      assert.deepEqual(image, { width: 2432, height: 6300, transparentPixels: 0, missingBackgroundPixels: 0, missingFooterPixels: 0 });
+      assert.deepEqual(image, { width: outputWidth, height: 6300, transparentPixels: 0, missingBackgroundPixels: 0, missingFooterPixels: 0 });
       const stats = await isolated(test.tabId, 'stats');
       assert.equal(stats.coverageResult.complete, true);
       assert.equal(stats.liveCanvases, 0);
@@ -325,10 +330,10 @@ export async function runReliabilityChecks({ browserContext, serviceWorker, base
     const test = await setup('dark-footer.html');
     const cdp = await browserContext.newCDPSession(test.target);
     try {
-      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1621, height: 1378, deviceScaleFactor: 1.5, mobile: false });
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 2560, height: 1440, deviceScaleFactor: 1.5, mobile: false });
       await test.target.evaluate((kind) => {
         if (kind === 'over-budget') { document.body.style.width = '5000px'; document.body.style.height = '5000px'; return; }
-        const canvas = document.createElement('canvas'); canvas.width = 2432; canvas.height = 6300;
+        const canvas = document.createElement('canvas'); canvas.width = 3840; canvas.height = 6300;
         canvas.style.cssText = 'display:block;width:100%;height:4200px';
         const context = canvas.getContext('2d'), image = context.createImageData(canvas.width, canvas.height);
         let seed = 0x12345678;

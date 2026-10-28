@@ -8,14 +8,16 @@
   let pendingNativeWork = Promise.resolve();
 
   /** Conservative peak of capture and encoding, not a browser RSS guarantee.
-   * 12P reserves canvas backing/native copies. Capture additionally reserves
-   * 32T for two UTF-16 base64 screenshot strings, PNG Blob and decoded bitmap.
-   * Tiles are closed before encoding, which reserves two worst-case PNG buffers.
+   * Capture reserves 8P for the disconnected RGBA destination and a native copy,
+   * plus 32T for two UTF-16 base64 tile strings, PNG Blob and decoded bitmap.
+   * Only toBlob creates the full-frame encoder snapshot/readback/conversion:
+   * encoding retains 12P native canvas/input headroom plus two worst-case PNGs.
+   * Tiles are closed before encoding; the native-work gate fences replacements.
    * Worker/popup transfer is checked separately after this canvas is released.
    */
   function estimateWorkingBytes({ canvasPixels, tilePixels, pngBytes }) {
     if (![canvasPixels, tilePixels, pngBytes].every((n) => Number.isFinite(n) && n >= 0)) return Infinity;
-    return 12 * canvasPixels + Math.max(32 * tilePixels, 2 * pngBytes) + limits.digestOverheadBytes;
+    return Math.max(8 * canvasPixels + 32 * tilePixels, 12 * canvasPixels + 2 * pngBytes) + limits.digestOverheadBytes;
   }
   function estimatePngBytes(canvasPixels, height) {
     // RGBA plus row filters, stored-deflate block/chunk overhead and headers.

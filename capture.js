@@ -5,7 +5,7 @@
   const coded = (code) => Object.assign(new Error(code), { code });
   const MAX_SECTIONS = 2048;
   const scrollKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End', ' ', 'Spacebar']);
-  let pendingEncoder = Promise.resolve();
+  let pendingNativeWork = Promise.resolve();
 
   /** Conservative peak of capture and encoding, not a browser RSS guarantee.
    * 12P reserves canvas backing/native copies. Capture additionally reserves
@@ -125,6 +125,24 @@
       } catch { /* Destroyed extension contexts cannot mask page cleanup failure. */ }
     };
     const freeCanvas = () => { if (canvas) { canvas.width = 0; canvas.height = 0; canvas = null; } };
+    function decodeTile(dataUrl, attempt) {
+      let bitmap, finish;
+      let closed = false;
+      pendingNativeWork = new Promise((resolve) => { finish = resolve; });
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        try { bitmap?.close(); } finally { finish(); }
+      };
+      return (async () => {
+        try {
+          const response = await fetch(dataUrl); checkpoint(attempt);
+          const blob = await response.blob(); checkpoint(attempt);
+          bitmap = await createImageBitmap(blob);
+          return { bitmap, close };
+        } catch (error) { close(); throw error; }
+      })();
+    }
     async function restore() {
       if (restored || !transaction) return;
       restored = true;
@@ -158,10 +176,6 @@
     }
     try {
       checkpoint();
-      // Cancel/timeout frees the canvas immediately, but cannot cancel toBlob's
-      // native snapshot. A replacement waits for that callback before allocating
-      // or preparing, so abandoned encoders cannot accumulate outside the peak.
-      await guarded(() => pendingEncoder); checkpoint();
       transaction = Longform.page.beginTransaction(localCtx);
       const hello = await guarded(() => chrome.runtime.sendMessage({ type: 'BROKER_HELLO', protocolVersion,
         documentId: ctx.documentId, sessionId: ctx.sessionId }), (late) => releaseActivity(late?.generation)); checkpoint();
@@ -169,6 +183,11 @@
       generation = hello.generation;
       if (pendingActivityGeneration === generation) stop('target-changed');
       checkpoint();
+      // Register activity first so away/back while waiting cannot be forgotten.
+      // Cancel/timeout frees the canvas immediately, but cannot cancel native
+      // tile/encoder storage. Wait for settlement and closure of any late bitmap
+      // before preparing or allocating another capture.
+      await guarded(() => pendingNativeWork); checkpoint();
       for (let attempt = 1; attempt <= 2; attempt++) {
         ctx.publish({ attempt, phase: 'preparing', section: 0, sections: 0 });
         try {
@@ -203,18 +222,14 @@
             if (response.generation !== generation) throw coded('worker-interrupted');
             if (response.tileIndex !== index || typeof response.dataUrl !== 'string') throw coded('invalid-response');
             const beforeScreenshot = actual;
-            const bitmap = await guarded(async () => {
-              const responseBlob = await fetch(response.dataUrl); checkpoint(attempt);
-              const blob = await responseBlob.blob(); checkpoint(attempt);
-              return createImageBitmap(blob);
-            }, (late) => late?.close());
+            const tile = await guarded(() => decodeTile(response.dataUrl, attempt), (late) => late.close());
             try {
               checkpoint(attempt);
               actual = observer.sample();
               if (!sameLayout(frozen, actual) || actual.scrollX !== beforeScreenshot.scrollX
                   || actual.scrollY !== beforeScreenshot.scrollY) throw coded('unstable-page');
-              coverage.add(geometry.drawCapture(drawing, bitmap, metrics, actual.scrollX, actual.scrollY));
-            } finally { bitmap.close(); }
+              coverage.add(geometry.drawCapture(drawing, tile.bitmap, metrics, actual.scrollX, actual.scrollY));
+            } finally { tile.close(); }
             ctx.publish({ section: section + 1 });
           }
           ctx.publish({ phase: 'validating' });
@@ -265,7 +280,7 @@
   function canvasToPngBlob(canvas) {
     const encoding = new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(coded('encoding-failed')), 'image/png'));
     // This fulfilled-only gate survives cancellation and same-version reinjection.
-    pendingEncoder = encoding.then(() => {}, () => {});
+    pendingNativeWork = encoding.then(() => {}, () => {});
     return encoding;
   }
   Longform.capture = Object.freeze({ run, estimateWorkingBytes, estimatePngBytes });

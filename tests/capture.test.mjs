@@ -44,8 +44,21 @@ async function setup(options = {}) {
       stats.canvases.push(canvas);
       return canvas;
     } },
-    fetch: async () => { await hold('fetch'); return { blob: async () => new Blob(['tile']) }; },
-    createImageBitmap: async () => { stats.decodes = (stats.decodes || 0) + 1; await hold('bitmap'); return { width: Math.ceil(viewportWidth * pixelRatio), height: Math.ceil(viewportHeight * pixelRatio), close() { stats.closes++; } }; },
+    fetch: async () => {
+      const fetchIndex = stats.fetches = (stats.fetches || 0) + 1; await hold('fetch');
+      if (options.tileFailure === 'fetch' && fetchIndex === 1) throw new Error('Native fetch failed');
+      return { blob: async () => {
+        await hold('blob');
+        if (options.tileFailure === 'blob' && fetchIndex === 1) throw new Error('Native Blob failed');
+        return new Blob(['tile']);
+      } };
+    },
+    createImageBitmap: async () => {
+      stats.decodes = (stats.decodes || 0) + 1; const decode = stats.decodes; await hold('bitmap');
+      if (options.decodeFailure && decode === 1) throw new Error('Native decode failed');
+      return { width: Math.ceil(viewportWidth * pixelRatio), height: Math.ceil(viewportHeight * pixelRatio),
+        close() { stats.closes++; (stats.closeAllocations ||= []).push(stats.allocations); } };
+    },
     chrome: { runtime: { id: 'extension',
       onMessage: { addListener(fn) { messages.add(fn); }, removeListener(fn) { messages.delete(fn); } },
       async sendMessage(request) {
@@ -288,9 +301,36 @@ test('cancelled native encoding must settle before replacement canvas allocation
   env.owner.dispose();
 });
 
-test('replacement waiting for an abandoned encoder honors cancel and external timeout', async (t) => {
-  for (const outcome of ['cancel', 'timeout']) await t.test(outcome, async () => {
-    const env = await setup({ hold: 'encoding' });
+test('cancelled native tile work must release before replacement canvas allocation', async (t) => {
+  for (const hold of ['fetch', 'blob', 'bitmap']) for (const stop of ['cancel', 'timeout']) await t.test(`${hold}/${stop}`, async () => {
+    const env = await setup({ hold });
+    const first = env.start(); await flush();
+    assert.equal(env.stats.held, hold);
+    if (stop === 'cancel') env.owner.cancel(first.sessionId);
+    else await env.clock.advance(10000);
+    await flush();
+    assert.equal(env.owner.snapshot().phase, stop === 'cancel' ? 'cancelled' : 'failed');
+    if (stop === 'timeout') assert.equal(env.owner.snapshot().errorCode, 'external-timeout');
+    assert.equal(env.stats.restores, 1);
+    assert.ok(env.stats.canvases.every((canvas) => canvas.width === 0 && canvas.height === 0));
+    await inject(env.context, 'capture.js');
+    const next = env.start(); await flush();
+    assert.equal(env.stats.allocations, 1, 'abandoned native tile work still owns storage');
+    assert.deepEqual(env.stats.encodes, []);
+    env.pending.resolve(); await flush();
+    assert.equal(env.owner.snapshot().sessionId, next.sessionId);
+    assert.equal(env.owner.snapshot().phase, 'ready-to-deliver');
+    if (hold === 'bitmap') assert.equal(env.stats.closeAllocations[0], 1, 'old bitmap closes before replacement allocation');
+    assert.equal(env.stats.decodes, env.stats.closes);
+    assert.equal(await env.owner.artifact(next.sessionId).text(), '2');
+    assert.throws(() => env.owner.artifact(first.sessionId), { code: 'artifact-unavailable' });
+    env.owner.dispose();
+  });
+});
+
+test('replacement waiting for abandoned native work honors cancel and external timeout', async (t) => {
+  for (const hold of ['encoding', 'bitmap']) for (const outcome of ['cancel', 'timeout']) await t.test(`${hold}/${outcome}`, async () => {
+    const env = await setup({ hold });
     const first = env.start(); await flush(); env.owner.cancel(first.sessionId); await flush();
     const next = env.start(); await flush();
     if (outcome === 'cancel') env.owner.cancel(next.sessionId);
@@ -308,20 +348,63 @@ test('replacement waiting for an abandoned encoder honors cancel and external ti
   });
 });
 
-test('native encoder wait is bounded by the replacement original work deadline', async () => {
-  const env = await setup({ hold: 'encoding' });
-  const first = env.start(); await flush(); env.owner.cancel(first.sessionId); await flush();
-  const unsubscribe = env.owner.subscribe((state) => {
-    if (state.phase === 'preparing' && state.sessionId !== first.sessionId) env.stats.elapsed = 119500;
+test('native work wait is bounded by the replacement original work deadline', async (t) => {
+  for (const hold of ['encoding', 'bitmap']) await t.test(hold, async () => {
+    const env = await setup({ hold });
+    const first = env.start(); await flush(); env.owner.cancel(first.sessionId); await flush();
+    const unsubscribe = env.owner.subscribe((state) => {
+      if (state.phase === 'preparing' && state.sessionId !== first.sessionId) env.stats.elapsed = 119500;
+    });
+    const next = env.start(); await flush();
+    await env.clock.advance(500);
+    assert.equal(env.owner.snapshot().errorCode, 'work-timeout');
+    assert.equal(env.stats.allocations, 1);
+    env.pending.resolve(); await flush();
+    assert.throws(() => env.owner.artifact(next.sessionId), { code: 'artifact-unavailable' });
+    assert.equal(env.stats.allocations, 1);
+    unsubscribe(); env.owner.dispose();
   });
+});
+
+test('native tile failure releases its lifetime gate for a new capture', async (t) => {
+  for (const tileFailure of ['fetch', 'blob', 'bitmap']) await t.test(tileFailure, async () => {
+    const env = await setup({ tileFailure, decodeFailure: tileFailure === 'bitmap' });
+    env.start(); await flush();
+    assert.equal(env.owner.snapshot().phase, 'failed');
+    assert.equal(env.stats.restores, 1);
+    const next = env.start(); await flush();
+    assert.equal(env.owner.snapshot().phase, 'ready-to-deliver');
+    assert.equal(await env.owner.artifact(next.sessionId).text(), '2');
+    env.owner.dispose();
+  });
+});
+
+test('late native tile rejection releases a waiting replacement without stale output', async () => {
+  const env = await setup({ hold: 'bitmap', decodeFailure: true });
+  const first = env.start(); await flush(); env.owner.cancel(first.sessionId); await flush();
   const next = env.start(); await flush();
-  await env.clock.advance(500);
-  assert.equal(env.owner.snapshot().errorCode, 'work-timeout');
   assert.equal(env.stats.allocations, 1);
   env.pending.resolve(); await flush();
-  assert.throws(() => env.owner.artifact(next.sessionId), { code: 'artifact-unavailable' });
+  assert.equal(env.owner.snapshot().phase, 'ready-to-deliver');
+  assert.equal(await env.owner.artifact(next.sessionId).text(), '2');
+  assert.throws(() => env.owner.artifact(first.sessionId), { code: 'artifact-unavailable' });
+  env.owner.dispose();
+});
+
+test('authenticated activity loss while waiting for native storage stops the replacement', async () => {
+  const env = await setup({ hold: 'bitmap' });
+  const first = env.start(); await flush(); env.owner.cancel(first.sessionId); await flush();
+  const next = env.start(); await flush();
+  assert.equal(env.stats.requests.filter((request) => request.type === 'BROKER_HELLO').length, 2,
+    'replacement registers browser activity before waiting on native storage');
+  env.notify(); await flush();
+  assert.equal(env.owner.snapshot().errorCode, 'target-changed');
   assert.equal(env.stats.allocations, 1);
-  unsubscribe(); env.owner.dispose();
+  env.pending.resolve(); await flush();
+  assert.equal(env.stats.allocations, 1);
+  assert.equal(env.stats.decodes, env.stats.closes);
+  assert.throws(() => env.owner.artifact(next.sessionId), { code: 'artifact-unavailable' });
+  env.owner.dispose();
 });
 
 test('native encoding failure clears the gate for a new capture', async (t) => {

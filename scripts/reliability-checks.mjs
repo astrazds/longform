@@ -48,7 +48,12 @@ export const reliabilityWorldScript = `
     return nativeScroll(...args);
   };
   const nativeBitmap = globalThis.createImageBitmap.bind(globalThis);
-  const nativeToBlob = HTMLCanvasElement.prototype.toBlob, canvases = [], encodings = [];
+  const nativeToBlob = HTMLCanvasElement.prototype.toBlob, canvases = [], encodings = [], bitmapClosures = [];
+  const nativeBitmapClose = ImageBitmap.prototype.close;
+  ImageBitmap.prototype.close = function(...args) {
+    const result = nativeBitmapClose.apply(this, args);
+    bitmapClosures.push({ canvasAllocations: canvases.length }); return result;
+  };
   const nativeCreateElement = document.createElement.bind(document);
   document.createElement = (...args) => {
     const element = nativeCreateElement(...args);
@@ -111,7 +116,8 @@ export const reliabilityWorldScript = `
       const canvasPixels = size.width * size.height;
       const tilePixels = Math.ceil(metrics.viewportWidth * metrics.pixelRatio) * Math.ceil(metrics.viewportHeight * metrics.pixelRatio);
       const pngReserveBytes = Longform.capture.estimatePngBytes(canvasPixels, size.height);
-      return { captureCalls, draws, tileHeld, digestHeld, bitmapHeld, coverageResult, encodings,
+      return { captureCalls, draws, tileHeld, digestHeld, bitmapHeld, coverageResult, encodings, bitmapClosures,
+        canvasAllocations: canvases.length,
         liveCanvases: canvases.filter((canvas) => canvas.width && canvas.height).length,
         memory: { canvasPixels, tilePixels, pngReserveBytes,
           capturePeakBytes: Longform.capture.estimateWorkingBytes({ canvasPixels, tilePixels, pngBytes: pngReserveBytes }) } };
@@ -260,6 +266,59 @@ export async function runReliabilityChecks({ browserContext, serviceWorker, base
       assert.ok(stats.memory.capturePeakBytes < 512 * 1024 * 1024);
       return { metrics, ...image, artifactBytes, memory: stats.memory, coverageResult: stats.coverageResult, restored: true, savedAndDecoded: true };
     } finally { await cdp.detach(); await test.close(); }
+  });
+
+  for (const interruption of ['none', 'activity']) await scenario(interruption === 'none'
+    ? 'hidpi-cancelled-bitmap-replacement-waits-for-close' : 'hidpi-cancelled-bitmap-replacement-activity-loss', async () => {
+    const test = await setup('dark-footer.html', { holdBitmap: true });
+    const cdp = await browserContext.newCDPSession(test.target);
+    let other;
+    try {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1621, height: 1378, deviceScaleFactor: 1.5, mobile: false });
+      await test.start();
+      let stats;
+      for (let i = 0; i < 200; i++) {
+        stats = await isolated(test.tabId, 'stats'); if (stats.bitmapHeld) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(stats.bitmapHeld, true);
+      const first = await test.snapshot();
+      await isolated(test.tabId, 'cancel'); assert.equal((await test.wait()).phase, 'cancelled'); await restored(test);
+      await test.start(); const replacement = await test.snapshot();
+      assert.notEqual(replacement.sessionId, first.sessionId);
+      assert.equal(replacement.phase, 'preparing');
+      stats = await isolated(test.tabId, 'stats');
+      assert.equal(stats.canvasAllocations, 1); assert.equal(stats.liveCanvases, 0);
+      assert.equal(stats.bitmapClosures.length, 0); assert.equal(stats.encodings.length, 0);
+      if (interruption === 'activity') {
+        other = await browserContext.newPage(); await other.goto('data:text/html,<title>Other tab</title>'); await other.bringToFront();
+        const inactive = await worker.evaluate((tabId) => chrome.tabs.get(tabId), test.tabId);
+        assert.equal(inactive.active, false);
+        const stopped = await test.wait();
+        assert.equal(stopped.phase, 'failed'); assert.equal(stopped.errorCode, 'target-changed'); await restored(test);
+        await test.target.bringToFront();
+        await isolated(test.tabId, 'releaseBitmap');
+        for (let i = 0; i < 200; i++) {
+          stats = await isolated(test.tabId, 'stats'); if (stats.bitmapClosures.length) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.equal(stats.bitmapClosures.length, 1); assert.equal(stats.canvasAllocations, 1);
+        assert.equal(stats.captureCalls, 1); assert.equal(stats.encodings.length, 0);
+        assert.equal((await test.snapshot()).errorCode, 'target-changed');
+        await assert.rejects(() => test.clientPage.evaluate(() => reliabilityClient.artifact()));
+        return { errorCode: stopped.errorCode, nativeActivityLost: true, replacementWaited: true,
+          staleNativeWorkDidNotResume: true, canvasAllocations: stats.canvasAllocations, captureCalls: stats.captureCalls, restored: true };
+      }
+      await isolated(test.tabId, 'releaseBitmap');
+      assert.equal((await test.wait()).phase, 'ready-to-deliver'); await restored(test);
+      stats = await isolated(test.tabId, 'stats');
+      assert.equal(stats.bitmapClosures[0].canvasAllocations, 1);
+      assert.equal(stats.canvasAllocations, 2); assert.equal(stats.liveCanvases, 0);
+      assert.equal(stats.encodings.length, 1);
+      assert.deepEqual([stats.encodings[0].width, stats.encodings[0].height], [2432, 6300]);
+      return { replacementWaited: true, oldBitmapClosedBeforeReplacementAllocation: true,
+        encodings: stats.encodings, canvasAllocations: stats.canvasAllocations, liveCanvases: stats.liveCanvases, restored: true };
+    } finally { await other?.close(); await cdp.detach(); await test.close(); }
   });
 
   for (const kind of ['over-budget', 'incompressible']) await scenario(`hidpi-${kind}-rejection-and-cleanup`, async () => {

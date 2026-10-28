@@ -95,10 +95,12 @@ encoding; PNG reservation includes uncompressed RGBA, row filters and conservati
 stored-deflate/chunk/header overhead without assuming compression. The actual
 encoded Blob must still fit 32MiB. Transfer has its own estimate after the runner
 releases its canvas, so worker/popup copies do not overlap capture in this model.
-If Cancel or timeout leaves a native encoder callback pending, a new capture
-waits for it before preparing or allocating. That wait retains the new session's
-Cancel, 10-second external bound and original work deadline; a late callback
-cannot publish the abandoned image. This prevents overlapping native snapshots.
+If Cancel or timeout leaves native tile fetch/Blob/decode or encoding pending, a
+new capture waits for it before preparing or allocating. The tile gate extends
+through actual bitmap closure, including a late decoded result. That wait retains
+the new session's Cancel, 10-second external bound and original work deadline;
+a late callback cannot publish the abandoned image. This prevents overlapping native tile storage
+and encoder snapshots across replacement captures.
 
 The content owner retains at most one completed PNG per document in isolated
 memory for two minutes. Closing the popup does not cancel capture. Reopening

@@ -47,10 +47,19 @@
       entry.timer = setTimeout(() => expire(entry), limits.externalMs);
       entry.timer.unref?.();
     }
-    function invalidate({ tabId, windowId }) {
+    function invalidate({ tabId, windowId, activeTabId }) {
+      const notifications = [];
       for (const [id, record] of documents) {
         if ((tabId !== undefined && id === tabId) || (windowId !== undefined && record.windowId === windowId)) {
           record.epoch++;
+          if (activeTabId !== undefined && id !== activeTabId) {
+            for (const [sessionId, session] of record.sessions) if (session.captureActive) {
+              session.captureActive = false;
+              notifications.push({ tabId: id, browserDocumentId: record.browserDocumentId,
+                message: { type: 'CAPTURE_TARGET_LOST', protocolVersion, generation,
+                  documentId: record.contentDocumentId, sessionId } });
+            }
+          }
           // Activation invalidates in-flight work without forgetting tile counters.
           for (const entry of digests) if (entry.record === record) expire(entry);
           // Navigation, removal and detachment end this browser document binding.
@@ -60,8 +69,9 @@
           }
         }
       }
+      return notifications;
     }
-    function hello(sender) {
+    function hello(sender, request) {
       authenticate(sender);
       const previous = documents.get(sender.tab.id);
       if (!previous || previous.browserDocumentId !== sender.documentId || previous.windowId !== sender.tab.windowId) {
@@ -74,6 +84,27 @@
         documents.set(sender.tab.id, { browserDocumentId: sender.documentId, windowId: sender.tab.windowId,
           epoch: 0, contentDocumentId: null, sessions: new Map() });
       }
+      if (request) {
+        const bound = scope({ ...request, generation, requestId: `register:${request.sessionId}` }, sender);
+        if (bound.session.captureEpoch === null) {
+          bound.session.captureEpoch = bound.epoch;
+          bound.session.captureActive = true;
+        }
+      }
+      return { generation };
+    }
+    async function register(request, sender) {
+      hello(sender, request);
+      const bound = scope({ ...request, generation, requestId: `register:${request.sessionId}` }, sender);
+      try {
+        if (!bound.session.captureActive || bound.session.captureEpoch !== bound.epoch) throw fail('target-changed');
+        await bounded(active(bound, sender));
+        return { generation };
+      } catch (error) { bound.session.captureActive = false; throw error; }
+    }
+    function unregister(request, sender) {
+      const bound = scope(request, sender);
+      bound.session.captureActive = false;
       return { generation };
     }
     function scope(request, sender) {
@@ -88,7 +119,7 @@
       let session = record.sessions.get(request.sessionId);
       if (!session) {
         // Keep lightweight replay metadata for this browser document's lifetime.
-        session = { nextTile: 0, busy: false, digestTransfers: new Set() };
+        session = { nextTile: 0, busy: false, digestTransfers: new Set(), captureEpoch: null, captureActive: false };
         record.sessions.set(request.sessionId, session);
       }
       return { record, session, epoch: record.epoch };
@@ -111,6 +142,7 @@
     }
     async function capture(request, sender) {
       const bound = scope(request, sender);
+      if (!bound.session.captureActive || bound.session.captureEpoch !== bound.epoch) throw fail('target-changed');
       if (request.type !== 'CAPTURE_TILE' || !Number.isSafeInteger(request.tileIndex)
           || request.tileIndex !== bound.session.nextTile || bound.session.busy) throw fail('invalid-request');
       bound.session.busy = true;
@@ -188,7 +220,7 @@
       }).finally(() => release(entry));
       return bounded(hashing, () => expire(entry));
     }
-    return Object.freeze({ hello, capture, invalidate, digestMessage });
+    return Object.freeze({ hello, register, unregister, capture, invalidate, digestMessage });
   }
   Longform.broker = Object.freeze({ create });
 })();

@@ -24,7 +24,7 @@ class Style {
 }
 
 async function setup({ suspendedPaint = false, elements = 2 } = {}) {
-  const root = { style: new Style() };
+  const root = { style: new Style(), scrollWidth: 1600, scrollHeight: 2000, clientWidth: 800, clientHeight: 600 };
   const body = { style: new Style() };
   const sticky = Array.from({ length: elements }, () => ({ style: new Style(), position: 'fixed' }));
   const listeners = new Map();
@@ -33,7 +33,7 @@ async function setup({ suspendedPaint = false, elements = 2 } = {}) {
   const scrolls = [];
   let removes = 0;
   const window = {
-    scrollX: 17.5, scrollY: 96.25,
+    scrollX: 17.5, scrollY: 96.25, innerWidth: 800, innerHeight: 600, devicePixelRatio: 1.25,
     getComputedStyle: (element) => ({ position: element.position || 'static' }),
     addEventListener(name, callback) { listeners.set(name, callback); },
     removeEventListener(name, callback) { if (listeners.get(name) === callback) listeners.delete(name); },
@@ -46,9 +46,10 @@ async function setup({ suspendedPaint = false, elements = 2 } = {}) {
   };
   const document = {
     documentElement: root, body, scrollingElement: root,
-    head: { append(node) { nodes.push(node); } },
+    head: { append(node) { node.isConnected = true; nodes.push(node); } },
     querySelectorAll: () => [root, body, ...sticky],
-    createElement: () => ({ textContent: '', remove() { removes++; nodes.splice(nodes.indexOf(this), 1); } }),
+    createElement: () => ({ textContent: '', isConnected: false, sheet: { cssRules: [], media: { mediaText: '' } },
+      remove() { removes++; this.isConnected = false; nodes.splice(nodes.indexOf(this), 1); } }),
   };
   const controller = new AbortController();
   const ctx = {
@@ -96,9 +97,9 @@ async function layoutSetup() {
   };
   const document = {
     documentElement: root, scrollingElement: root, body,
-    head: { append(node) { mutate({ type: 'childList', target: this, addedNodes: [node], removedNodes: [] }); } },
+    head: { append(node) { node.isConnected = true; mutate({ type: 'childList', target: this, addedNodes: [node], removedNodes: [] }); } },
     querySelectorAll: () => elements,
-    createElement: () => ({ textContent: '', remove() {} }),
+    createElement: () => ({ textContent: '', isConnected: false, remove() { this.isConnected = false; } }),
     addEventListener(name, callback) { listeners.set(name, callback); },
     removeEventListener(name) { listeners.delete(name); },
   };
@@ -416,7 +417,7 @@ test('computed backgrounds settle while offscreen images do not block', async ()
   observer.dispose();
 });
 
-test('retry reuses original transaction and fences old scroll continuations', async () => {
+test('retry preserves newer declarations but refuses broken suppression and fences old scroll continuations', async () => {
   const env = await setup({ suspendedPaint: true });
   env.ctx.checkpoint = (attempt = env.ctx.attempt) => {
     if (attempt !== env.ctx.attempt) throw Object.assign(new Error('stale'), { code: 'stale-attempt' });
@@ -430,16 +431,77 @@ test('retry reuses original transaction and fences old scroll continuations', as
   const lateFixed = { style: new Style(), position: 'fixed' };
   env.sticky.push(lateFixed);
   env.ctx.attempt = 2;
-  const preparing = tx.prepare();
-  env.resumePaint(); await flush(); env.resumePaint(); await preparing;
+  await assert.rejects(tx.prepare(), { code: 'preparation-changed' });
+  env.resumePaint(); await flush(); env.resumePaint();
   await rejected;
   assert.equal(env.nodes.length, 1);
-  assert.equal(lateFixed.style.visibility, 'hidden');
   assert.equal(env.sticky[0].style.visibility, 'visible');
   assert.equal((await tx.restore()).ok, true);
   assert.equal(lateFixed.style.visibility, '');
   assert.equal(env.sticky[0].style.visibility, 'visible');
   assert.deepEqual([env.window.scrollX, env.window.scrollY], [17.5, 96.25]);
+});
+
+// Accepting a nonthrowing scroll without observing it used to release a PNG.
+test('ineffective restoration reports failure and still restores all policies', async () => {
+  const env = await setup();
+  env.root.style.setProperty('scroll-behavior', 'smooth');
+  const tx = env.page.beginTransaction(env.ctx);
+  await tx.prepare(); await tx.scrollTo(500, 700);
+  env.sticky[1].style.fail = (name, value) => name === 'visibility' && value === '';
+  env.window.scrollTo = () => {};
+  const result = tx.restoreSync();
+  assert.equal(result.ok, false);
+  assert.deepEqual([...result.failures], ['visibility', 'scroll-position']);
+  assert.equal(env.root.style.getPropertyValue('scroll-behavior'), 'smooth');
+  assert.equal(env.sticky[0].style.visibility, '');
+  assert.equal(env.nodes.length, 0);
+});
+
+test('restoration permits genuine live shrink and device pixel rounding before releasing policies', async () => {
+  for (const shrink of [false, true]) {
+    const env = await setup();
+    const tx = env.page.beginTransaction(env.ctx);
+    await tx.prepare(); await tx.scrollTo(500, 700);
+    if (shrink) env.root.scrollHeight = 650; // live max Y is 50, originally 1400
+    env.window.scrollTo = ({ left, top }) => {
+      assert.equal(env.root.style.getPropertyValue('scroll-snap-type'), 'none');
+      env.window.scrollX = Math.round(left * 1.25) / 1.25;
+      env.window.scrollY = shrink ? 50 : Math.round(top * 1.25) / 1.25;
+    };
+    const x = Object.getOwnPropertyDescriptor(env.window, 'scrollX');
+    let readWhileSuppressed = false;
+    Object.defineProperty(env.window, 'scrollX', { configurable: true,
+      get() { readWhileSuppressed = env.root.style.getPropertyValue('scroll-snap-type') === 'none'; return x.value; },
+      set(value) { x.value = value; } });
+    assert.equal(tx.restoreSync().ok, true);
+    assert.equal(readWhileSuppressed, true, 'verification occurs before policies are restored');
+    assert.equal(env.root.style.length, 0);
+  }
+});
+
+test('preparation stylesheet integrity is checked during retry and observer validation', async () => {
+  for (const change of ['remove', 'text', 'disabled', 'rules', 'media']) {
+    const env = await setup();
+    const tx = env.page.beginTransaction(env.ctx);
+    await tx.prepare();
+    if (change === 'remove') env.nodes[0].isConnected = false;
+    if (change === 'text') env.nodes[0].textContent += 'body { color: red; }';
+    if (change === 'disabled') env.nodes[0].disabled = true;
+    // CSSOM edits need not modify textContent or fire MutationObserver.
+    if (change === 'rules') env.nodes[0].sheet = { cssRules: [{ cssText: 'body {}' }] };
+    if (change === 'media') env.nodes[0].sheet.media.mediaText = 'print';
+    await assert.rejects(tx.prepare(), { code: 'preparation-changed' });
+    await tx.restore();
+    assert.equal(env.root.style.length, 0);
+  }
+  const env = await layoutSetup();
+  await env.tx.prepare();
+  const observer = env.page.observeLayout(env.tx, env.ctx);
+  env.root.style.setProperty('scroll-snap-type', 'y mandatory', 'important');
+  assert.throws(() => observer.sample(), { code: 'preparation-changed' });
+  observer.dispose(); await env.tx.restore();
+  assert.equal(env.root.style.getPropertyValue('scroll-snap-type'), 'y mandatory');
 });
 
 test('partial preparation unwinds', async () => {

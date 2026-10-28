@@ -14,6 +14,7 @@
     'artifact-expired': Object.freeze({ phase: 'error', text: 'Capture expired. Choose Save or Copy to capture again.' }),
     'incomplete-coverage': Object.freeze({ phase: 'error', text: 'This page could not be captured completely. Try another page.' }),
     'unstable-page': Object.freeze({ phase: 'error', text: 'This page kept changing. Wait for it to settle, then try again.' }),
+    'preparation-changed': Object.freeze({ phase: 'error', text: 'This page changed during preparation. Wait for it to settle, then try again.' }),
     'resource-timeout': Object.freeze({ phase: 'error', text: 'Page images did not finish loading. Wait, then try again.' }),
     'work-timeout': Object.freeze({ phase: 'error', text: 'Capture took too long. Try a shorter page.' }),
     'target-changed': Object.freeze({ phase: 'error', text: 'The active page changed. Keep this page active, then try again.' }),
@@ -107,7 +108,7 @@
   }
 
   /** Callback resolves a validated Blob only after delivery commit succeeds. */
-  async function copyBlobDuringGesture(getCommittedBlob) {
+  async function copyBlobDuringGesture(getCommittedBlob, { signal } = {}) {
     if (globalThis.location?.protocol !== 'chrome-extension:') throw new Error('clipboard write runs in the popup');
     if (!canCopyArtifact()) return { phrase: 'copy-unavailable', deliveryOutcome: 'failed' };
     let captureError;
@@ -119,14 +120,36 @@
     }).catch((error) => { captureError = error; throw error; });
     // Attach a rejection handler even if ClipboardItem throws synchronously.
     blobPromise.catch(() => {});
+    let native;
     try {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blobPromise })]);
+      // Initiate synchronously, even though the PNG and commit are pending.
+      native = Promise.resolve(navigator.clipboard.write([new ClipboardItem({ 'image/png': blobPromise })]));
+    } catch (error) { native = Promise.reject(error); }
+    // Observe early native rejection while still awaiting capture/cleanup.
+    const acknowledgement = native.then(() => ({ ok: true }), (error) => ({ error }));
+    try {
       await blobPromise;
+      const result = await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (error, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer); signal?.removeEventListener('abort', unknown);
+          if (error) reject(error); else resolve(value);
+        };
+        const unknown = () => finish(Object.assign(new Error('delivery-unknown'), { code: 'delivery-unknown' }));
+        // This bound begins only after the validated Blob crosses commit.
+        const timer = setTimeout(unknown, Longform.protocol.limits.externalMs);
+        signal?.addEventListener('abort', unknown, { once: true });
+        if (signal?.aborted) unknown();
+        acknowledgement.then((value) => finish(null, value));
+      });
+      if (result.error) throw result.error;
       return { phrase: 'copied', deliveryOutcome: 'success' };
     } catch (writeError) {
       try { await blobPromise; } catch (error) { captureError = error; }
       return { phrase: phraseForFailure(captureError, writeError),
-        deliveryOutcome: captureError?.code === 'delivery-unknown' ? 'unknown' : 'failed' };
+        deliveryOutcome: captureError?.code === 'delivery-unknown' || writeError?.code === 'delivery-unknown' ? 'unknown' : 'failed' };
     }
   }
 

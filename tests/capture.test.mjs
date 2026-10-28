@@ -7,6 +7,7 @@ async function setup(options = {}) {
   const clock = fakeClock();
   const pending = deferred();
   const events = new Map();
+  const messages = new Set();
   const stats = { snapshots: 0, preparations: 0, restores: 0, disposed: 0, allocations: 0,
     scrolls: [], tiles: [], draws: [], closes: 0, encodes: [], requests: [], cleanupAt: null };
   let generation = 0;
@@ -24,7 +25,10 @@ async function setup(options = {}) {
   const context = await loadContext(['capture-geometry.js', 'capture-session.js', 'capture.js'], {
     window: { addEventListener(type, fn) { if (!events.has(type)) events.set(type, new Set()); events.get(type).add(fn); },
       removeEventListener(type, fn) { events.get(type)?.delete(fn); } },
-    document: { createElement(type) {
+    document: { visibilityState: options.hidden ? 'hidden' : 'visible',
+      addEventListener(type, fn) { if (!events.has(type)) events.set(type, new Set()); events.get(type).add(fn); },
+      removeEventListener(type, fn) { events.get(type)?.delete(fn); },
+      createElement(type) {
       assert.equal(type, 'canvas');
       const id = ++stats.allocations;
       const canvas = { width: 0, height: 0, getContext() { return { canvas, fillRect() {},
@@ -34,9 +38,12 @@ async function setup(options = {}) {
     } },
     fetch: async () => { await hold('fetch'); return { blob: async () => new Blob(['tile']) }; },
     createImageBitmap: async () => { stats.decodes = (stats.decodes || 0) + 1; await hold('bitmap'); return { width: 100, height: 100, close() { stats.closes++; } }; },
-    chrome: { runtime: { async sendMessage(request) {
+    chrome: { runtime: { id: 'extension',
+      onMessage: { addListener(fn) { messages.add(fn); }, removeListener(fn) { messages.delete(fn); } },
+      async sendMessage(request) {
       stats.requests.push(request);
-      if (request.type === 'BROKER_HELLO') return { success: true, generation: 'worker-one' };
+      if (request.type === 'BROKER_HELLO') { await hold('hello'); return { success: true, generation: 'worker-one' }; }
+      if (request.type === 'BROKER_RELEASE') return { success: true };
       stats.tiles.push(request.tileIndex);
       await hold('screenshot');
       if (owner.snapshot().attempt === 2) await hold('retry-screenshot');
@@ -52,7 +59,7 @@ async function setup(options = {}) {
     beginTransaction(ctx) {
       stats.snapshots++;
       return { async prepare() { stats.preparations++; (stats.deadlines ||= []).push(ctx.deadline); const a = ctx.attempt; await hold('preparation'); ctx.checkpoint(a); },
-        async scrollTo(x, y) { ctx.checkpoint(); scrollX = x; scrollY = options.stuck ? 0 : options.fractional && y > 0 && y < rootHeight - 100 ? y + 0.25 : y; if (options.lazyGrowth && y === 100) rootHeight = 300; stats.scrolls.push([x, y]); },
+        async scrollTo(x, y) { if (stats.tiles.length === 1) await hold('between-tiles'); ctx.checkpoint(); scrollX = x; scrollY = options.stuck ? 0 : options.fractional && y > 0 && y < rootHeight - 100 ? y + 0.25 : y; if (options.lazyGrowth && y === 100) rootHeight = 300; stats.scrolls.push([x, y]); },
         async restore() { stats.restores++; stats.cleanupAt ??= clock.now(); scrollX = 0; scrollY = 0;
           await hold('restoration'); return { ok: !options.cleanupFailed }; } };
     },
@@ -64,8 +71,89 @@ async function setup(options = {}) {
   owner = context.Longform.sessions.install({ run: context.Longform.capture.run, now: () => clock.now() + (stats.elapsed || 0), schedule: clock.schedule });
   const start = () => owner.start({ destination: 'download' });
   const fire = (type, data = {}) => { for (const fn of [...(events.get(type) || [])]) fn({ type, ...data }); };
-  return { owner, stats, clock, start, fire, pending, api: context.Longform.capture };
+  return { owner, stats, clock, start, fire, pending, api: context.Longform.capture, document: context.document, runtime: context.chrome.runtime,
+    notify(patch = {}, sender = { id: 'extension' }) {
+      for (const fn of [...messages]) fn({ type: 'CAPTURE_TARGET_LOST', protocolVersion: 6,
+        generation: 'worker-one', documentId: owner.snapshot().documentId, sessionId: owner.snapshot().sessionId, ...patch }, sender);
+    } };
 }
+
+test('authenticated activity loss stops visible preparation and stale notifications cannot cancel a replacement', async () => {
+  const env = await setup({ hold: 'preparation' });
+  env.start(); await flush();
+  const old = env.owner.snapshot();
+  for (const patch of [{ documentId: 'stale' }, { sessionId: 'stale' }, { generation: 'old-worker' }, { protocolVersion: 5 }]) env.notify(patch);
+  env.notify({}, { id: 'forged' }); await flush();
+  assert.equal(env.stats.restores, 0);
+  env.notify(); await flush();
+  assert.equal(env.document.visibilityState, 'visible', 'native activity loss need not report visibility loss');
+  assert.equal(env.owner.snapshot().errorCode, 'target-changed');
+  assert.equal(env.stats.restores, 1);
+  env.pending.resolve(); await flush();
+  let sentStaleDuringReplacement = false;
+  const unsubscribe = env.owner.subscribe((state) => {
+    if (state.phase === 'capturing' && !sentStaleDuringReplacement) {
+      sentStaleDuringReplacement = true; env.notify({ sessionId: old.sessionId });
+    }
+  });
+  env.start(); await flush();
+  assert.notEqual(env.owner.snapshot().sessionId, old.sessionId);
+  env.notify({ sessionId: old.sessionId }); await flush();
+  assert.equal(env.owner.snapshot().phase, 'ready-to-deliver');
+  assert.equal(sentStaleDuringReplacement, true);
+  assert.equal(env.stats.requests.filter((request) => request.type === 'BROKER_RELEASE').length, 2);
+  unsubscribe(); env.owner.dispose();
+});
+
+test('activity loss arriving before the registration reply cannot be forgotten', async () => {
+  const env = await setup({ hold: 'hello' }); env.start(); await flush();
+  env.notify({ generation: 'old-worker' }); env.notify();
+  env.pending.resolve(); await flush();
+  assert.equal(env.owner.snapshot().errorCode, 'target-changed');
+  assert.equal(env.stats.preparations, 0);
+  assert.equal(env.stats.restores, 1);
+  assert.equal(env.stats.requests.filter((request) => request.type === 'BROKER_RELEASE').length, 1);
+});
+
+test('best-effort activity release cannot mask cleanup failure if messaging throws synchronously', async () => {
+  const env = await setup({ cleanupFailed: true });
+  const send = env.runtime.sendMessage;
+  env.runtime.sendMessage = (request) => {
+    if (request.type === 'BROKER_RELEASE') throw new Error('Extension context invalidated');
+    return send(request);
+  };
+  env.start(); await flush();
+  assert.equal(env.owner.snapshot().errorCode, 'cleanup-failed');
+  assert.throws(env.start, { code: 'reload-required' });
+});
+
+// Losing activity must fence the session even when no broker call is in flight.
+test('visibility loss latches during preparation and between screenshot requests', async (t) => {
+  for (const hold of ['preparation', 'between-tiles']) await t.test(hold, async () => {
+    const env = await setup({ hold });
+    const { sessionId } = env.start(); await flush();
+    assert.equal(env.stats.held, hold);
+    const tiles = env.stats.tiles.length;
+    env.document.visibilityState = 'hidden'; env.fire('visibilitychange');
+    env.document.visibilityState = 'visible'; env.fire('visibilitychange');
+    await flush();
+    assert.equal(env.stats.restores, 1, 'cleanup starts without waiting for suspended page work');
+    assert.equal(env.owner.snapshot().errorCode, 'target-changed');
+    const scrolls = env.stats.scrolls.length;
+    env.pending.resolve(); await flush();
+    assert.equal(env.stats.tiles.length, tiles);
+    assert.equal(env.stats.scrolls.length, scrolls);
+    assert.deepEqual(env.stats.encodes, []);
+    assert.throws(() => env.owner.artifact(sessionId), { code: 'artifact-unavailable' });
+  });
+});
+
+test('an initially hidden document cannot start preparation', async () => {
+  const env = await setup({ hidden: true }); env.start(); await flush();
+  assert.equal(env.owner.snapshot().errorCode, 'target-changed');
+  assert.equal(env.stats.preparations, 0);
+  assert.equal(env.stats.requests.length, 0);
+});
 
 // Removing retry or retaining the first canvas makes these artifact assertions fail.
 test('finite growth discards first attempt', async () => {

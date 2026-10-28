@@ -258,26 +258,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     await client.start(destination);
     await waitReady();
     const artifact = await client.artifact();
-    await client.commit(artifact.transferId);
-    return artifact;
+    const committed = await client.commit(artifact.transferId);
+    return { ...artifact, sessionId: committed.sessionId };
   }
   function deliver(destination) {
     if (activeGesture) return;
     activeGesture = true; render();
-    let transferId;
-    const produce = async () => { const artifact = await committedArtifact(destination); transferId = artifact.transferId; return artifact.blob; };
+    let transferId, sessionId, deliveryClient, unsubscribe;
+    const controller = new AbortController();
+    const produce = async () => {
+      const artifact = await committedArtifact(destination);
+      transferId = artifact.transferId; sessionId = artifact.sessionId; deliveryClient = client;
+      // The owner enforces the remaining work budget. A terminal snapshot or
+      // lost connection releases a stalled native write without claiming success.
+      unsubscribe = deliveryClient.subscribe((state, alive) => {
+        if (!alive || state.sessionId !== sessionId || state.phase !== 'delivering') controller.abort();
+      });
+      return artifact.blob;
+    };
     // This call must occur synchronously in Copy's originating gesture.
-    const operation = destination === 'clipboard' ? copyBlobDuringGesture(produce) : produce().then((blob) => {
+    const operation = destination === 'clipboard' ? copyBlobDuringGesture(produce, { signal: controller.signal }) : produce().then((blob) => {
       Longform.delivery.save(blob, `longform-capture-${new Date().toISOString().replace(/[:.]/g, '-')}.png`);
       return { deliveryOutcome: 'success' };
     });
-    operation.then(async (outcome) => {
-      if (transferId) await client.result(transferId, outcome.deliveryOutcome);
-      if (outcome.deliveryOutcome !== 'success') failure({ code: outcome.deliveryOutcome === 'unknown' ? 'delivery-unknown' : outcome.phrase || 'delivery-failed' });
-    }).catch(async (error) => {
-      if (transferId) { try { await client.result(transferId, 'failed'); } catch (failure) { error = failure; } }
-      failure(error);
-    }).finally(() => { activeGesture = false; render(); });
+    operation.catch((error) => ({ deliveryOutcome: 'failed', error })).then(async (outcome) => {
+      const state = deliveryClient?.snapshot();
+      if (transferId && state.sessionId === sessionId && state.phase === 'delivering') {
+        // Send at most one result. A lost acknowledgement is already unknown;
+        // a second failed result must not follow it or target an explicit retry.
+        await deliveryClient.result(transferId, outcome.deliveryOutcome);
+      }
+      if (outcome.error) failure(outcome.error);
+      else if (outcome.deliveryOutcome !== 'success') failure({ code: outcome.deliveryOutcome === 'unknown' ? 'delivery-unknown' : outcome.phrase || 'delivery-failed' });
+    }).catch(failure).finally(() => { unsubscribe?.(); activeGesture = false; render(); });
   }
   save.addEventListener('click', () => deliver('download'));
   copy.addEventListener('click', () => deliver('clipboard'));

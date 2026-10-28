@@ -43,11 +43,16 @@ transitions. Cleanup restores only declarations still owned by the transaction;
 newer page writes, including `!important`, survive. Pagehide performs synchronous
 cleanup. Pending callbacks are fenced so BFCache restoration cannot resume
 stale capture work. Arbitrary page JavaScript, video and canvas drawing continue.
+Preparation declarations and the owned stylesheet (including CSSOM rules) are
+checked before retry, scrolling and layout validation. A changed invariant fails
+safely while preserving newer site declarations. Cleanup verifies original
+coordinates before restoring scroll policies, allowing live shrinkage and half
+a device pixel of rounding; a mismatch blocks output and reuse.
 
 ## Capture and validation
 
 The engine traverses the finite root scroll surface first, waiting for visible
-images, CSS backgrounds, fonts and two stable layout samples 150ms apart.
+images, CSS backgrounds and two stable layout samples 150ms apart.
 Clipped descendants do not inflate root bounds. Root horizontal overflow and
 fractional device pixels are supported; nested scrollers, virtualized lists,
 infinite feeds and iframe interiors are outside this traversal.
@@ -63,6 +68,16 @@ target before and after the native operation, and fences activation changes
 even when the user switches away and back. A new worker generation interrupts
 existing capture rather than continuing with uncertain ownership. User wheel,
 touch and scrolling keys interrupt capture without suppressing the input.
+
+Capture's `BROKER_HELLO` registers its content document/session against the
+browser sender's document, tab and window and checks initial activity. The
+session keeps that activation epoch across tile requests. On activation away,
+the worker sends `CAPTURE_TARGET_LOST` only to that browser document; content
+checks extension sender, protocol, worker generation and exact owner identity
+before aborting. This also covers browsers reporting a visible inactive tab.
+Content latches `visibilitychange` loss separately. Neither path resumes on
+return. `BROKER_RELEASE` removes activity registration after capture settles
+(including a late registration reply); document invalidation removes it too.
 
 ## Budgets and delivery
 
@@ -90,8 +105,12 @@ download handoff or clipboard promise resolution ends cancellation. A lost
 acknowledgement at commit produces an unknown outcome and never silently repeats
 delivery. The user may explicitly retry. Success says **Download started.** or
 **Copied.**; Save does not confirm that bytes reached disk.
+Clipboard acknowledgement is bounded to 10 seconds after the committed Blob
+resolves and interrupted by owner termination or connection loss. A stalled
+write becomes unknown and releases the gesture lock. Late native settlement
+cannot update a recovery session or produce a second delivery result.
 
-Safe failure codes distinguish `incomplete-coverage`, `unstable-page`,
+Safe failure codes distinguish `incomplete-coverage`, `unstable-page`, `preparation-changed`,
 `resource-timeout`, `external-timeout`, `work-timeout`, `page-too-large`,
 `target-changed`, `worker-interrupted`, `user-interrupted`, `cleanup-failed`,
 `transfer-failed`, `delivery-unknown` and `artifact-expired`. The popup translates

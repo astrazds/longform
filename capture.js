@@ -45,8 +45,11 @@
     ctx.signal.addEventListener('abort', parentAbort, { once: true });
     if (ctx.signal.aborted) parentAbort();
     let finished = false;
+    let generation;
+    let pendingActivityGeneration;
     const checkpoint = (attempt = ctx.attempt) => {
       if (finished) throw coded('stale-session');
+      if (document.visibilityState !== 'visible') stop('target-changed');
       if (controller.signal.aborted) throw controller.signal.reason;
       ctx.checkpoint(attempt);
     };
@@ -78,17 +81,38 @@
     });
     const onInput = (event) => { if (event.type !== 'keydown' || scrollKeys.has(event.key)) stop('user-interrupted'); };
     const onHide = () => stop('page-restored');
+    // A return to this tab cannot revive work after any loss of visibility.
+    const onVisibility = () => { if (document.visibilityState !== 'visible') stop('target-changed'); };
+    const onActivityLost = (message, sender) => {
+      if (sender?.id === chrome.runtime.id && message?.type === 'CAPTURE_TARGET_LOST'
+          && message.protocolVersion === protocolVersion
+          && message.documentId === ctx.documentId && message.sessionId === ctx.sessionId) {
+        if (generation && message.generation === generation) stop('target-changed');
+        // The worker's notification may beat its HELLO reply across IPC. Check
+        // its generation against that reply before any preparation can begin.
+        else if (!generation) pendingActivityGeneration = message.generation;
+      }
+      return false;
+    };
     const inputTypes = ['wheel', 'touchstart', 'keydown'];
     for (const type of inputTypes) window.addEventListener(type, onInput, { capture: true, passive: true });
     window.addEventListener('pagehide', onHide);
+    document.addEventListener('visibilitychange', onVisibility);
+    chrome.runtime.onMessage.addListener(onActivityLost);
     let transaction;
     let observer;
     let canvas;
     let captureMetrics;
     let restored = false;
-    let generation;
     let tileIndex = 0; // Broker counter spans attempts; section progress does not.
     let requestIndex = 0;
+    const releaseActivity = (workerGeneration) => {
+      try {
+        if (workerGeneration) void chrome.runtime.sendMessage({ type: 'BROKER_RELEASE', protocolVersion,
+          requestId: `${ctx.sessionId}:release`, generation: workerGeneration,
+          documentId: ctx.documentId, sessionId: ctx.sessionId }).catch(() => {});
+      } catch { /* Destroyed extension contexts cannot mask page cleanup failure. */ }
+    };
     const freeCanvas = () => { if (canvas) { canvas.width = 0; canvas.height = 0; canvas = null; } };
     async function restore() {
       if (restored || !transaction) return;
@@ -124,9 +148,12 @@
     try {
       checkpoint();
       transaction = Longform.page.beginTransaction(localCtx);
-      const hello = await guarded(() => chrome.runtime.sendMessage({ type: 'BROKER_HELLO' })); checkpoint();
+      const hello = await guarded(() => chrome.runtime.sendMessage({ type: 'BROKER_HELLO', protocolVersion,
+        documentId: ctx.documentId, sessionId: ctx.sessionId }), (late) => releaseActivity(late?.generation)); checkpoint();
       if (!hello?.success || typeof hello.generation !== 'string' || !hello.generation) throw coded(hello?.errorCode || 'worker-interrupted');
       generation = hello.generation;
+      if (pendingActivityGeneration === generation) stop('target-changed');
+      checkpoint();
       for (let attempt = 1; attempt <= 2; attempt++) {
         ctx.publish({ attempt, phase: 'preparing', section: 0, sections: 0 });
         try {
@@ -206,6 +233,9 @@
         ctx.signal.removeEventListener('abort', parentAbort);
         for (const type of inputTypes) window.removeEventListener(type, onInput, { capture: true });
         window.removeEventListener('pagehide', onHide);
+        document.removeEventListener('visibilitychange', onVisibility);
+        chrome.runtime.onMessage.removeListener(onActivityLost);
+        releaseActivity(generation);
       }
     }
   }

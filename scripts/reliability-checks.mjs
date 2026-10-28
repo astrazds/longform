@@ -10,6 +10,7 @@ export const reliabilityWorldScript = `
   const config = {}; const events = []; const draws = []; let coverageResult;
   let clockOffset = 0; let captureCalls = 0; let releaseTile; let tileHeld = false;
   let releaseDigest; let digestHeld = false; const ports = new Set();
+  let releaseBitmap; let bitmapHeld = false;
   chrome.runtime.onConnect.addListener((port) => ports.add(port));
   const geometry = Longform.geometry;
   Longform.geometry = Object.freeze({ ...geometry,
@@ -41,6 +42,19 @@ export const reliabilityWorldScript = `
     return sendMessage(...args);
   };
   const owner = Longform.sessions.install({ run: (ctx) => Longform.capture.run(ctx), now: () => Date.now() + clockOffset });
+  const nativeScroll = window.scrollTo.bind(window);
+  window.scrollTo = (...args) => {
+    if (config.ineffectiveRestore && owner.snapshot().phase === 'restoring') return;
+    return nativeScroll(...args);
+  };
+  const nativeBitmap = globalThis.createImageBitmap.bind(globalThis);
+  globalThis.createImageBitmap = async (...args) => {
+    const bitmap = await nativeBitmap(...args);
+    if (config.holdBitmap && !bitmapHeld) {
+      bitmapHeld = true; await new Promise((resolve) => { releaseBitmap = resolve; });
+    }
+    return bitmap;
+  };
   const nativeSetProperty = CSSStyleDeclaration.prototype.setProperty;
   const nativeRemoveProperty = CSSStyleDeclaration.prototype.removeProperty;
   let writes = 0; let cleanupFaulted = false;
@@ -56,11 +70,22 @@ export const reliabilityWorldScript = `
   };
   owner.subscribe((state) => {
     events.push(state);
+    if (config.undoSuppressionOnRetry && state.phase === 'preparing' && state.attempt === 2) {
+      document.getElementById('fixed').style.setProperty('visibility', 'visible', 'important');
+    }
     if (state.phase === 'capturing' && state.section === 0) {
       const phaseAttempt = state.attempt;
       if (config.shrink && phaseAttempt === 1) document.querySelector('main').style.height = '1100px';
       if (config.retry === 'always' || (config.retry === 'once' && phaseAttempt === 1)) {
         document.body.dataset.reliabilityChange = String(phaseAttempt);
+      }
+      if (config.changePreparationStyle) {
+        const style = [...document.querySelectorAll('style')].find((node) => node.textContent.includes('animation-play-state: paused'));
+        if (config.changePreparationStyle === 'remove') style.remove();
+        else if (config.changePreparationStyle === 'text') style.textContent += 'html { scroll-behavior: smooth; }';
+        else if (config.changePreparationStyle === 'disabled') style.sheet.disabled = true;
+        else if (config.changePreparationStyle === 'media') style.sheet.media.appendMedium('print');
+        else style.sheet.deleteRule(0);
       }
     }
     if (config.cancelPhase === state.phase && state.canCancel) owner.cancel(state.sessionId);
@@ -70,9 +95,10 @@ export const reliabilityWorldScript = `
     configure(next) { Object.assign(config, next); },
     snapshot: () => owner.snapshot(),
     events: () => events,
-    stats: () => ({ captureCalls, draws, tileHeld, digestHeld, coverageResult }),
+    stats: () => ({ captureCalls, draws, tileHeld, digestHeld, bitmapHeld, coverageResult }),
     releaseTile() { releaseTile?.(); },
     releaseDigest() { releaseDigest?.(); },
+    releaseBitmap() { releaseBitmap?.(); },
     advance(ms) { clockOffset += ms; return owner.snapshot(); },
     cancel() { owner.cancel(owner.snapshot().sessionId); },
   });
@@ -233,6 +259,81 @@ export async function runReliabilityChecks({ browserContext, serviceWorker, base
       await restored(test, expectedState);
       return { attempt: state.attempt, phase: state.phase, errorCode: state.errorCode };
     } finally { await test.close(); }
+  });
+
+  for (const change of ['suppression', 'remove', 'text', 'rules', 'disabled', 'media']) await scenario(`preparation-integrity-${change}`, async () => {
+    const test = await setup('capture-interruption.html', change === 'suppression'
+      ? { retry: 'once', undoSuppressionOnRetry: true } : { changePreparationStyle: change });
+    try {
+      await test.start(); const state = await test.wait();
+      assert.equal(state.phase, 'failed'); assert.equal(state.errorCode, 'preparation-changed');
+      assert.equal(state.attempt, change === 'suppression' ? 2 : 1);
+      await restored(test); // newer visible!important equals the fixture's original declaration
+      await assert.rejects(() => test.clientPage.evaluate(() => reliabilityClient.artifact()));
+      return { errorCode: state.errorCode, attempt: state.attempt, output: false, restored: true };
+    } finally { await test.close(); }
+  });
+
+  await scenario('ineffective-scroll-restoration-blocks-output-and-reuse', async () => {
+    const test = await setup('capture-interruption.html', { ineffectiveRestore: true });
+    try {
+      await test.start(); const state = await test.wait();
+      assert.equal(state.phase, 'failed'); assert.equal(state.errorCode, 'cleanup-failed');
+      const live = await test.livePageState();
+      assert.notEqual(live.y, test.expectedRestoredState.y);
+      assert.equal(live.ownedStyles, 0); assert.deepEqual(live.styles, test.expectedRestoredState.styles);
+      await assert.rejects(() => test.clientPage.evaluate(() => reliabilityClient.artifact()));
+      await assert.rejects(() => test.clientPage.evaluate(() => reliabilityClient.start('download')));
+      return { errorCode: state.errorCode, output: false, reuseBlocked: true, inversesAttempted: true };
+    } finally { await test.close(); }
+  });
+
+  for (const stage of ['preparation', 'between-requests']) await scenario(`visibility-away-back-${stage}`, async () => {
+    const test = await setup('capture-interruption.html', { holdBitmap: stage === 'between-requests' });
+    let other, pendingRoute;
+    const resourceUrl = `${baseUrl}/tests/fixtures/visibility-pending.png`;
+    const intercept = (route) => { pendingRoute = route; };
+    try {
+      if (stage === 'preparation') {
+        await browserContext.route(resourceUrl, intercept);
+        await test.target.evaluate((url) => {
+          const image = document.createElement('img'); image.width = 30; image.height = 30;
+          image.style.cssText = 'position:absolute;top:0;left:0'; image.src = url; document.body.append(image);
+        }, resourceUrl);
+        test.expectedRestoredState = await test.livePageState();
+      }
+      await test.start();
+      let stats;
+      for (let i = 0; i < 200; i++) {
+        stats = await isolated(test.tabId, 'stats');
+        if (stage === 'preparation' ? pendingRoute : stats.bitmapHeld) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(stage === 'preparation' ? pendingRoute : stats.bitmapHeld, 'suspended at the intended boundary');
+      const callsBeforeSwitch = stats.captureCalls;
+      assert.equal(callsBeforeSwitch, stage === 'preparation' ? 0 : 1);
+      other = await browserContext.newPage(); await other.goto('data:text/html,<body style="background:rgb(255,0,255)">Other tab</body>');
+      await other.bringToFront();
+      const [otherTab] = await worker.evaluate(async (url) => (await chrome.tabs.query({})).filter((tab) => tab.url === url), other.url());
+      if (otherTab) await worker.evaluate((tabId) => chrome.tabs.update(tabId, { active: true }), otherTab.id);
+      const activeTabs = await worker.evaluate(async () => (await chrome.tabs.query({})).map(({ id, active }) => ({ id, active })));
+      assert.equal(activeTabs.find(({ id }) => id === test.tabId).active, false);
+      const observedVisibilityAtLoss = await test.target.evaluate(() => document.visibilityState);
+      // Headless Chromium may report visible for an inactive tab. The native
+      // activation notification must stop capture without relying on that hint.
+      const state = await test.wait(); assert.equal(state.errorCode, 'target-changed');
+      await restored(test);
+      await worker.evaluate((tabId) => chrome.tabs.update(tabId, { active: true }), test.tabId);
+      await test.target.bringToFront(); await isolated(test.tabId, 'releaseBitmap');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal((await isolated(test.tabId, 'stats')).captureCalls, callsBeforeSwitch);
+      assert.equal((await test.snapshot()).phase, 'failed');
+      await assert.rejects(() => test.clientPage.evaluate(() => reliabilityClient.artifact()));
+      return { errorCode: state.errorCode, captureCalls: callsBeforeSwitch, restoredWhileInactive: true, observedVisibilityAtLoss, resumedCalls: 0 };
+    } finally {
+      await pendingRoute?.abort().catch(() => {}); await browserContext.unroute(resourceUrl, intercept);
+      await isolated(test.tabId, 'releaseBitmap').catch(() => {}); await other?.close(); await test.close();
+    }
   });
 
   // A held native screenshot lets each interruption happen at an exact boundary.

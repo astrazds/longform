@@ -85,6 +85,7 @@
       if (disposed) throw codedError('observer-disposed');
       owner.checkpoint(attempt);
       ctx.checkpoint(attempt);
+      owner.verifyPreparation();
     };
     const changed = (records) => { if (!disposed && records.length) generation++; };
     const mutations = new MutationObserver(changed);
@@ -265,16 +266,39 @@
    *   restore(): Promise<CleanupResult>, restoreSync(): CleanupResult}}
    */
   function beginTransaction(ctx) {
-    return createTransaction(ctx, { left: window.scrollX, top: window.scrollY });
+    return createTransaction(ctx, { left: window.scrollX, top: window.scrollY }, liveScrollLimits());
   }
 
-  function createTransaction(ctx, originalPosition) {
+  function liveScrollLimits() {
+    const root = document.scrollingElement || document.documentElement;
+    return { left: Math.max(0, root.scrollWidth - root.clientWidth),
+      top: Math.max(0, root.scrollHeight - root.clientHeight) };
+  }
+
+  function createTransaction(ctx, originalPosition, originalLimits) {
     const journal = [];
     const properties = new WeakMap();
     const subscribers = new Set();
     let prepared = false;
     let closed = false;
     let result;
+
+    const rules = (node) => node.sheet ? Array.from(node.sheet.cssRules, (rule) => rule.cssText).join('\n') : null;
+    function verifyPreparation() {
+      for (const entry of journal) {
+        if (entry.node) {
+          if (!entry.node.isConnected || entry.node.textContent !== entry.text
+              || entry.node.sheet !== entry.sheet || rules(entry.node) !== entry.rules
+              || entry.node.disabled || entry.node.sheet?.disabled || entry.node.media !== entry.media
+              || entry.node.sheet?.media?.mediaText !== entry.sheetMedia) {
+            throw codedError('preparation-changed');
+          }
+        } else if (entry.style.getPropertyValue(entry.property) !== entry.value
+            || entry.style.getPropertyPriority(entry.property) !== entry.priority) {
+          throw codedError('preparation-changed');
+        }
+      }
+    }
 
     function checkpoint(attempt = ctx.attempt) {
       if (closed) throw Object.assign(new Error('Page transaction restored'), { code: 'page-restored' });
@@ -341,6 +365,16 @@
       for (const entry of [...journal].reverse()) if (!entry.policy) inverse(entry);
       try {
         window.scrollTo({ ...originalPosition, behavior: 'instant' });
+        const live = liveScrollLimits();
+        const tolerance = 0.5 / (window.devicePixelRatio || 1) + 1e-7;
+        for (const [axis, actual] of [['left', window.scrollX], ['top', window.scrollY]]) {
+          const original = originalPosition[axis];
+          const shrank = live[axis] < originalLimits[axis];
+          const expected = shrank ? Math.min(original, live[axis]) : original;
+          if (!Number.isFinite(actual) || !Number.isFinite(expected) || Math.abs(actual - expected) > tolerance) {
+            record(failures, 'scroll-position');
+          }
+        }
       } catch {
         record(failures, 'scroll-position');
       }
@@ -363,6 +397,7 @@
       async prepare() {
         const attempt = ctx.attempt;
         checkpoint(attempt);
+        verifyPreparation();
         if (!prepared) {
           prepared = true;
           const targets = new Set([document.documentElement, document.body, document.scrollingElement].filter(Boolean));
@@ -382,7 +417,11 @@
           `;
           checkpoint();
           nodeMutation(style, () => (document.head || document.documentElement).append(style));
-          journal.push({ node: style });
+          const entry = { node: style };
+          journal.push(entry);
+          entry.text = style.textContent; entry.sheet = style.sheet;
+          entry.rules = rules(style); entry.media = style.media;
+          entry.sheetMedia = style.sheet?.media?.mediaText;
         }
         for (const element of document.querySelectorAll('*')) {
           checkpoint();
@@ -391,18 +430,21 @@
         }
         await waitForPaint();
         checkpoint(attempt);
+        verifyPreparation();
       },
       async scrollTo(x, y) {
         const attempt = ctx.attempt;
         checkpoint(attempt);
+        verifyPreparation();
         window.scrollTo({ left: x, top: y, behavior: 'instant' });
         await waitForPaint();
         checkpoint(attempt);
+        verifyPreparation();
       },
       async restore() { return restoreSync(); },
       restoreSync,
     });
-    transactions.set(transaction, { checkpoint, subscribers });
+    transactions.set(transaction, { checkpoint, subscribers, verifyPreparation });
     return transaction;
   }
 

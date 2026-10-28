@@ -65,7 +65,7 @@
       externalMs: 10000,
       digestOverheadBytes: 16 * 1024 * 1024,
     }),
-    brokerMessages: Object.freeze(['BROKER_HELLO', 'CAPTURE_TILE', 'DIGEST_BEGIN', 'DIGEST_CHUNK', 'DIGEST_END']),
+    brokerMessages: Object.freeze(['BROKER_HELLO', 'BROKER_RELEASE', 'CAPTURE_TILE', 'DIGEST_BEGIN', 'DIGEST_CHUNK', 'DIGEST_END']),
     validateEnvelope,
     createEnvelopeValidator,
     contentFiles: Object.freeze([

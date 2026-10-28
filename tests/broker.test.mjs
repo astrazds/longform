@@ -24,10 +24,36 @@ async function setup(capture, globals = {}) {
     } });
   const request = (s = sender(), extra = {}) => ({ type: 'CAPTURE_TILE', protocolVersion: 6,
     requestId: `request-${Math.random()}`, documentId: 'content-document', sessionId: 'session',
-    tileIndex: 0, generation: broker.hello(s).generation, ...extra });
+    tileIndex: 0, generation: broker.hello(s, { protocolVersion: 6, documentId: 'content-document', sessionId: 'session', ...extra }).generation, ...extra });
   return { broker, request, active, updates: () => updates, advance: (ms) => { time += ms; }, now: () => time };
 }
 const code = (expected) => (error) => { assert.equal(error.code, expected); return true; };
+
+test('activation between requests invalidates registered capture permanently and targets only the bound document', async () => {
+  const f = await setup(); const req = f.request();
+  await f.broker.capture(req, sender());
+  const notifications = f.broker.invalidate({ windowId: 10, activeTabId: 3 });
+  f.broker.invalidate({ windowId: 10, activeTabId: 1 });
+  await assert.rejects(f.broker.capture({ ...req, tileIndex: 1 }, sender()), code('target-changed'));
+  assert.deepEqual(JSON.parse(JSON.stringify(notifications)), [{ tabId: 1, browserDocumentId: 'browser-document',
+    message: { type: 'CAPTURE_TARGET_LOST', protocolVersion: 6, generation: req.generation,
+      documentId: 'content-document', sessionId: 'session' } }]);
+});
+
+test('registration rejects initially inactive targets and release removes activity notifications', async () => {
+  const f = await setup();
+  assert.equal(typeof f.broker.register, 'function');
+  const req = f.request();
+  f.active[10] = 3;
+  await assert.rejects(f.broker.register(req, sender()), code('target-changed'));
+  f.active[10] = 1;
+  const fresh = { ...req, sessionId: 'new-session' };
+  await f.broker.register(fresh, sender());
+  assert.equal(typeof f.broker.unregister, 'function');
+  f.broker.unregister(fresh, sender());
+  assert.deepEqual([...f.broker.invalidate({ windowId: 10, activeTabId: 3 })], []);
+  await assert.rejects(f.broker.capture({ ...fresh, tileIndex: 0 }, sender()), code('target-changed'));
+});
 
 test('switch away and back invalidates in flight tile', async () => {
   const pending = deferred();
@@ -200,12 +226,12 @@ test('navigation clears document session metadata while activation retains repla
   const f = await setup(); const request = f.request();
   await f.broker.capture(request, sender());
   f.broker.invalidate({ windowId: 10 });
-  await assert.rejects(f.broker.capture(request, sender()), code('invalid-request'));
+  await assert.rejects(f.broker.capture(request, sender()), code('target-changed'));
   const next = { ...request, requestId: 'next', tileIndex: 1 };
   f.broker.invalidate({ tabId: 1 });
   await assert.rejects(f.broker.capture(next, sender()), code('target-changed'));
   // A fresh HELLO re-establishes a document after navigation/removal invalidation.
-  f.broker.hello(sender());
+  f.broker.hello(sender(), request);
   assert.equal((await f.broker.capture(request, sender())).tileIndex, 0);
 });
 test('capture timeout fences late bytes and never overlaps pending native call', async () => {
@@ -222,8 +248,10 @@ test('capture timeout fences late bytes and never overlaps pending native call',
   await second; assert.equal(calls, 2);
 });
 test('background routes authenticated broker replies and activation invalidates pending request', async () => {
-  const listeners = []; const events = {}; const pending = deferred();
-  const tabs = { query: async () => [{ id: 1, windowId: 10 }], captureVisibleTab: () => pending.promise };
+  const listeners = []; const events = {}; const pending = deferred(); const started = deferred(); const notifications = [];
+  let captures = 0;
+  const tabs = { query: async () => [{ id: 1, windowId: 10 }], captureVisibleTab: () => { captures++; started.resolve(); return pending.promise; },
+    sendMessage: async (...args) => { notifications.push(args); } };
   for (const name of ['onActivated', 'onUpdated', 'onRemoved', 'onDetached']) {
     tabs[name] = { addListener: (listener) => { events[name] = listener; } };
   }
@@ -233,13 +261,17 @@ test('background routes authenticated broker replies and activation invalidates 
   });
   await inject(context, 'background.js');
   const send = (request) => new Promise((resolve) => assert.equal(listeners[0](request, sender(), resolve), true));
-  const hello = await send({ type: 'BROKER_HELLO' });
+  const hello = await send({ type: 'BROKER_HELLO', protocolVersion: 6, documentId: 'content-document', sessionId: 'session' });
   assert.equal(hello.success, true);
   const capture = send({ type: 'CAPTURE_TILE', protocolVersion: 6, generation: hello.generation,
     documentId: 'content-document', sessionId: 'session', requestId: 'request', tileIndex: 0 });
-  await flush();
+  await Promise.race([started.promise, capture.then(() => assert.fail('capture must reach the native boundary'))]);
+  assert.equal(captures, 1);
   events.onActivated({ tabId: 3, windowId: 10 });
   events.onActivated({ tabId: 1, windowId: 10 });
+  assert.deepEqual(JSON.parse(JSON.stringify(notifications)), [[1,
+    { type: 'CAPTURE_TARGET_LOST', protocolVersion: 6, generation: hello.generation,
+      documentId: 'content-document', sessionId: 'session' }, { documentId: 'browser-document', frameId: 0 }]]);
   pending.resolve('secret');
   const reply = await capture;
   assert.equal(reply.errorCode, 'target-changed');

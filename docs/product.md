@@ -13,11 +13,12 @@ Chrome installation. It has one download action, three setup steps, a brief
 use instruction, one limits disclosure, and privacy and source links.
 
 The [popup](../popup.html) shows **Full-page screenshot**, **Save**, and
-**Copy**. Each action starts capture immediately. There is no separate capture
-step, source selector, settings panel, or image editor.
+**Copy**. There is no separate capture step, source selector, settings panel,
+or image editor.
 
-The popup is quiet when ready. During capture, both buttons are disabled and
-one status message reports progress. Success is **Download started.** or **Copied.**
+The popup is quiet when ready and Copy is available. During capture, both
+buttons are disabled and one status message reports progress. Success is
+**Download started.** or **Copied.**
 Errors give a short recovery instruction. Unsupported pages disable both
 actions; unsupported clipboard writes leave Save available.
 
@@ -69,8 +70,8 @@ within its deadline. Reopening shows progress or **Capture ready. Choose Save or
 Copy.** A fresh click delivers the retained PNG without recapturing. One completed
 PNG stays in isolated document memory for two minutes, including time spent
 disconnected or transferring. Acknowledged delivery releases it; expiry requires
-a new capture. This recovery does not survive browser crashes or promise
-recovery after navigation/tab closure. See [architecture](architecture.md).
+a new capture. This recovery does not survive a browser crash, navigation, or
+tab closure. See [architecture](architecture.md).
 
 ## Privacy boundary
 

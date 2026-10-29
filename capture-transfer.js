@@ -41,7 +41,7 @@
   /**
    * TransferContext: {documentId,sessionId,signal,checkpoint(),external(operation,code?)}.
    * checkpoint must fence this transfer, identity, work budget and original TTL;
-   * external must race cancellation and min(10s,remaining work). It is NOT the
+   * external must race abort and min(10s, time until expiresAt). It is NOT the
    * capture runner's context, which is invalid after runner settlement.
    */
   function connection(port, ctx, transferId) {

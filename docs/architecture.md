@@ -12,12 +12,12 @@ The extension loads from the repository without compilation.
 | --- | --- | --- |
 | Lifecycle, budgets, cancellation, retention, delivery arbitration | `capture-session.js` | `tests/session.test.mjs` |
 | Reversible styles, root measurement, visible resources, stable layout | `capture-page.js` | `tests/page.test.mjs`, browser checks |
-| Tile positions, fractional rounding, exact rectangle coverage | `capture-geometry.js` | `tests/geometry.test.mjs`, `tests/coverage.test.mjs` |
+| Tile positions, fractional rounding, exact rectangle coverage | `capture-geometry.js` | `tests/runtime.test.mjs`, `tests/coverage.test.mjs` |
 | Preparation traversal, bounded retry, capture, validation, encoding | `capture.js` | `tests/capture.test.mjs`, browser checks |
 | Sender authentication, activation epochs, serialization, worker generation | `capture-broker.js`, `background.js` | `tests/broker.test.mjs`, browser checks |
 | Versioned envelopes, injection order, singleton entry | `protocol.js`, `content.js` | `tests/runtime.test.mjs` |
 | Acknowledged chunks, digest and PNG validation | `capture-transfer.js` | `tests/transfer.test.mjs` |
-| Extension-origin Save handoff and Blob URL lifetime | `capture-delivery.js` | `tests/delivery.test.mjs`, browser checks |
+| Extension-origin Save handoff and Blob URL lifetime | `capture-delivery.js` | `tests/transfer.test.mjs`, browser checks |
 | Subscription, phrases, gesture clipboard writes, controls | `popup.js`, `clipboard.js`, `popup.html`, `popup.css` | popup and unit checks |
 | Release files | `scripts/extension-files.mjs` | packaged release check |
 | Landing and privacy layout | `index.html`, `privacy.html`, `landing.css` | visual inspection |

@@ -27,9 +27,9 @@ extension storage. Navigation, tab/browser closure or a crash can lose the
 in-memory image.
 
 Image transfer uses bounded, acknowledged chunks inside extension contexts.
-Download links and screenshot URLs are created in the extension popup, outside
-the page DOM. Save starts the browser download flow; Longform does not verify
-that a file reached disk. Cancel is available until delivery commits. A lost
+Download links and screenshot download URLs are created in the extension
+popup, outside the page DOM. Save starts the browser download flow; Longform
+does not verify that a file reached disk. Cancel is available until delivery commits. A lost
 delivery acknowledgement is reported as unknown and is never automatically
 repeated.
 

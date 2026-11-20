@@ -200,7 +200,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function render() {
     const model = Longform.popup.view(snapshot, canCopyArtifact(), connected);
     const cancelFocused = document.activeElement === cancel;
-    if (cancelFocused && !model.cancel) returnFocus = true;
+    if (cancelFocused && (!model.cancel || !model.canCancel)) returnFocus = true;
     save.disabled = model.busy || model.blocked || activeGesture;
     copy.disabled = save.disabled || !canCopyArtifact();
     cancel.hidden = !model.cancel; cancel.disabled = !model.canCancel;

@@ -254,8 +254,7 @@ export async function runPopupChecks({ browserContext, serviceWorker, baseUrl, u
   let popup = cancelConnection.contexts()[0].pages().find((page) => page.url().endsWith('/popup.html'));
   await popup.waitForFunction(() => !document.getElementById('screenshotBtn').disabled);
   await popup.locator('#screenshotBtn').click();
-  await popup.locator('#cancelBtn').focus();
-  await popup.keyboard.press('Enter');
+  await popup.locator('#cancelBtn').press('Enter');
   await popup.waitForFunction(() => document.getElementById('status').textContent === 'Cancelled.').catch(async (error) => { throw new Error(`${error.message}; cancel state: ${await popup.locator('body').innerText()}`); });
   assert.equal(await popup.locator('#cancelBtn').isHidden(), true);
   assert.equal(await popup.locator('#screenshotBtn').evaluate((button) => document.activeElement === button), true);
